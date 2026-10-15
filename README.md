@@ -1,11 +1,13 @@
 # MeshCentral Mass Enter
 
+Current version: **0.1.1**
+
 MeshCentral plugin for one-time mass keyboard input on Windows sign-in screens.
 
 The plugin **does not enable AutoLogon**, does not change the Windows registry, does not store credentials, and does not execute login commands on endpoints. It opens a short normal MeshCentral KVM session to each selected device and sends:
 
 1. `Enter` key down + key up
-2. configurable delay, default `900 ms`
+2. configurable delay, default `1000 ms`
 3. `Enter` key down + key up
 4. closes the KVM relay
 
@@ -32,7 +34,7 @@ In MeshCentral Plugin Manager add this URL:
 https://raw.githubusercontent.com/TeenKode/meshcentral-massenter/main/config.json
 ```
 
-MeshCentral reads `config.json`, downloads the repository ZIP from GitHub and installs the plugin as `massenter`.
+MeshCentral reads `config.json`, compares the published plugin version with the installed version, downloads the repository ZIP from GitHub and installs/updates the plugin as `massenter`.
 
 ## Usage
 
@@ -42,7 +44,11 @@ MeshCentral reads `config.json`, downloads the repository ZIP from GitHub and in
 4. Change the delay or concurrency if necessary.
 5. Confirm.
 
-The progress window reports `OK`, `SKIP`, or `ERR` for every processed device.
+The confirmation modal closes immediately when the operation starts. Progress is displayed in a non-blocking floating panel so the rest of the MeshCentral interface remains usable. The panel reports `OK`, `SKIP`, or `ERR` for every processed device.
+
+## Versioning
+
+The project uses semantic versioning. Every functional change or bug fix increments the version in `config.json` and is documented in `CHANGELOG.md`. MeshCentral can then detect an update when the repository version is higher than the installed version.
 
 ## Important limitation
 
