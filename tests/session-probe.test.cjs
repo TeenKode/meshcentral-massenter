@@ -146,66 +146,86 @@ test('non-Windows and offline agents receive no native probe; per-user requests 
 });
 
 
-test('helper embeds original module source rather than Duktape function placeholders', () => {
+
+test('helper embeds original module source and returns facts through a private pipe', () => {
     const source = fs.readFileSync(require.resolve('../modules_meshcore/massenter.js'), 'utf8');
-    const script = buildProbeScript(2, source);
+    const token = 'a'.repeat(48);
+    const script = buildProbeScript(2, source, 'local-probe-pipe', token);
     const modules = {};
-    let result, exit;
+    let result;
     vm.runInNewContext(script, {
         addModule(name, text) { modules[name] = text; },
-        require(name) { assert.equal(name, 'massenter'); return { nativeSnapshot(id) { assert.equal(id, 2); return unlocked; } }; },
-        console: { log(text) { result = JSON.parse(text); } }, process: { exit(code) { exit = code; } }
+        require(name) {
+            if (name === 'massenter') return { nativeSnapshot(id) { assert.equal(id, 2); return unlocked; } };
+            assert.equal(name, 'net');
+            return { createConnection(options, cb) {
+                assert.equal(options.path, 'local-probe-pipe');
+                const socket = { end(text) { result = JSON.parse(text); }, on() {} };
+                cb.call(socket); return socket;
+            } };
+        },
+        setTimeout() {}, process: { exit() {} }
     });
     assert.equal(modules.massenter, source);
-    assert.deepEqual(result, unlocked);
-    assert.equal(exit, 0);
+    assert.deepEqual(result.facts, unlocked);
+    assert.equal(result.token, token);
     assert.ok(Buffer.from(script).toString('base64').length < 24000);
-    assert.throws(() => buildProbeScript('2);malicious()', source), /invalid-probe-script/);
+    assert.throws(() => buildProbeScript('2);malicious()', source, 'pipe', token), /invalid-probe-script/);
 });
-
 
 function agentHarness() {
     const handlers = {}, output = [], timers = new Map();
-    let next = 0, killed = 0;
-    const child = { stdout: { on(event, fn) { handlers.stdout = fn; } }, stderr: { on() {} },
-        on(event, fn) { handlers[event] = fn; }, waitExit(ms) { assert.equal(ms, 6000); }, kill() { killed++; } };
+    let next = 0, killed = 0, closed = 0, ended = 0;
+    const child = { stdout: { on() {} }, stderr: { on() {} }, kill() { killed++; } };
+    const ipc = { on(event, fn) { handlers[event] = fn; },
+        listen(options) {
+            assert.deepEqual(Array.from(options.path.slice(0, 9), c => c.charCodeAt(0)), [92,92,46,92,112,105,112,101,92]);
+            assert.equal(options.writableAll, undefined);
+        }, close() { closed++; } };
     const source = fs.readFileSync(require.resolve('../modules_meshcore/massenter.js'), 'utf8');
     const context = vm.createContext({ module: { exports: {} }, Buffer, console,
-        process: { platform: 'win32', execPath: 'C:\\MeshAgent.exe' }, getJSModule() { return source; },
+        process: { platform: 'win32', execPath: "C:\\MeshAgent.exe" }, getJSModule() { return source; },
         require(name) {
             if (name === 'user-sessions') return { consoleUid: () => 2 };
-            if (name === 'child_process') return { execFile() { return child; } };
+            if (name === 'net') return { createServer: () => ipc };
+            if (name === 'child_process') return { execFile(path, args, options) { assert.equal(args[0], 'MeshAgent.exe'); assert.equal(options.type, 2); return child; } };
             throw new Error(name);
         },
         setTimeout(fn) { const id = ++next; timers.set(id, fn); return id; },
         clearTimeout(id) { if (!timers.delete(id)) throw new Error('Invalid Parameter'); }
     });
     vm.runInContext(source, context);
-    context.module.exports.probe(facts => output.push(facts));
-    return { handlers, output, timers, killed: () => killed,
+    context.module.exports.probe(facts => output.push(facts), 'a'.repeat(48));
+    const socket = { on(event, fn) { handlers['client-' + event] = fn; }, end() { ended++; } };
+    return { handlers, output, timers, killed: () => killed, closed: () => closed, ended: () => ended,
+        connect() { handlers.connection(socket); },
         expire() { const [id, fn] = [...timers][0]; timers.delete(id); fn(); } };
 }
 
-test('MeshAgent watchdog never clears its own expired native timer', () => {
+test('MeshAgent watchdog never clears its own expired native timer and closes IPC', () => {
     const h = agentHarness();
     h.expire();
     assert.equal(h.output.length, 1);
     assert.equal(h.output[0].error, 'timeout');
     assert.equal(h.killed(), 1);
-    h.handlers.exit();
-    assert.equal(h.output.length, 1);
+    assert.equal(h.closed(), 1);
 });
 
-test('complete JSON stdout resolves before the child exit event; split output is supported', () => {
+test('private IPC accepts split JSON, validates the nonce, then releases all handles', () => {
     const h = agentHarness();
-    const json = JSON.stringify({ ...unlocked, sessionId: 2, processSessionId: 2 });
-    h.handlers.stdout(Buffer.from(json.slice(0, 20)));
     assert.equal(h.output.length, 0);
-    h.handlers.stdout(Buffer.from(json.slice(20)));
+    h.connect();
+    const json = JSON.stringify({ token: 'a'.repeat(48), facts: { ...unlocked, sessionId: 2, processSessionId: 2 } });
+    h.handlers['client-data'](Buffer.from(json.slice(0, 20)));
+    assert.equal(h.output.length, 0);
+    h.handlers['client-data'](Buffer.from(json.slice(20)));
     assert.equal(h.output.length, 1);
     assert.equal(h.output[0].desktop, 'Default');
     assert.equal(h.timers.size, 0);
     assert.equal(h.killed(), 1);
-    h.handlers.exit();
-    assert.equal(h.output.length, 1);
+    assert.equal(h.closed(), 1);
+    assert.equal(h.ended(), 1);
+    const invalid = agentHarness(); invalid.connect();
+    invalid.handlers['client-data'](Buffer.from(JSON.stringify({ token: 'wrong', facts: unlocked })));
+    assert.equal(invalid.output[0].error, 'invalid-response');
 });

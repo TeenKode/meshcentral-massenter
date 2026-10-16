@@ -108,24 +108,33 @@ function nativeSnapshot(expectedSession) {
 
 // Duktape's Function.toString() returns "[ecmascript code]", not source.
 // Use the original bundled module source from getJSModule(), like win-deskutils.
-function buildProbeScript(session, source) {
-    if (typeof session !== 'number' || session <= 0 || session >= 0xFFFFFFFF || Math.floor(session) !== session || typeof source !== 'string') throw new Error('invalid-probe-script');
-    return 'try { addModule("massenter", ' + JSON.stringify(source) + '); ' +
-        'console.log(JSON.stringify(require("massenter").nativeSnapshot(' + session + '))); }' +
+function buildProbeScript(session, source, pipePath, token) {
+    if (typeof session !== 'number' || session <= 0 || session >= 0xFFFFFFFF || Math.floor(session) !== session ||
+        typeof source !== 'string' || typeof pipePath !== 'string' || !/^[a-f0-9]{48}$/.test(token)) throw new Error('invalid-probe-script');
+    return 'var facts; try { addModule("massenter", ' + JSON.stringify(source) + '); ' +
+        'facts = require("massenter").nativeSnapshot(' + session + '); }' +
         'catch(e) { var code = String(e.message || e); var known = ["wts-unavailable", "wts-invalid", "desktop-unavailable", "console-changed"]; ' +
-        'console.log(JSON.stringify({error:known.indexOf(code) >= 0 ? code : "native-unavailable"})); } process.exit(0);';
+        'facts = {error:known.indexOf(code) >= 0 ? code : "native-unavailable"}; } ' +
+        'var ipc = require("net").createConnection({path:' + JSON.stringify(pipePath) + '}, function() {' +
+        'this.end(JSON.stringify({token:' + JSON.stringify(token) + ',facts:facts})); });' +
+        'ipc.on("error", function() { process.exit(1); });' +
+        'ipc.on("close", function() { process.exit(0); });' +
+        'setTimeout(function() { process.exit(1); }, 5000);';
 }
 
 var busy = false;
-function probe(callback) {
+function probe(callback, token) {
     if (process.platform !== 'win32') { callback({ error: 'not-windows' }); return; }
+    if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) { callback({ error: 'invalid-request' }); return; }
     if (busy) { callback({ error: 'busy' }); return; }
-    var child = null, done = false, output = '', timer = null;
+    var child = null, ipc = null, client = null, done = false, timer = null;
     function finish(facts) {
         if (done) return;
         done = true; busy = false;
         try { if (timer) clearTimeout(timer); } catch (ignore) { }
         timer = null;
+        try { if (client) client.end(); } catch (ignore) { }
+        try { if (ipc) ipc.close(); } catch (ignore) { }
         try { if (child) child.kill(); } catch (ignore) { }
         callback(facts);
     }
@@ -133,36 +142,38 @@ function probe(callback) {
         var session = require('user-sessions').consoleUid();
         if (session <= 0 || session === 0xFFFFFFFF) { finish({ error: 'no-console' }); return; }
         busy = true;
-        var script = buildProbeScript(session, getJSModule('massenter'));
+        // Cross-session stdout inheritance is unreliable on Windows. Use a
+        // private local named pipe, as MeshAgent's own win-dispatcher does.
+        // Default ACL permits writes by LocalSystem/owner, NOT writableAll.
+        var pipePath = "\\\\.\\pipe\\massenter-probe-" + token;
+        ipc = require('net').createServer();
+        ipc.on('connection', function (socket) {
+            if (done) { socket.end(); return; }
+            client = socket;
+            var output = '';
+            socket.on('error', function () { finish({ error: 'invalid-response' }); });
+            socket.on('data', function (data) {
+                if (done) return;
+                output += data.toString();
+                if (output.length > 8192) { finish({ error: 'invalid-response' }); return; }
+                var response;
+                try { response = JSON.parse(output); } catch (ignore) { return; }
+                if (!response || response.token !== token) { finish({ error: 'invalid-response' }); return; }
+                var facts = response.facts;
+                if (!facts || (facts.sessionId !== session && !facts.error)) facts = { error: 'console-changed' };
+                finish(facts);
+            });
+        });
+        ipc.on('error', function () { finish({ error: 'native-unavailable' }); });
+        ipc.listen({ path: pipePath });
+        var script = buildProbeScript(session, getJSModule('massenter'), pipePath, token);
         var encoded = Buffer.from(script).toString('base64');
         if (encoded.length > 24000) throw new Error('probe-script-too-large');
-        child = require('child_process').execFile(process.execPath,
-            [process.execPath.split('\\').pop(), '-b64exec', encoded], { type: 2 });
         timer = setTimeout(function () { timer = null; finish({ error: 'timeout' }); }, 6000);
-        child.stdout.on('data', function (data) {
-            output += data.toString();
-            if (output.length > 8192) { finish({ error: 'invalid-response' }); return; }
-            // Some MeshAgent builds delay the child exit event. The helper has
-            // one bounded JSON response; complete as soon as it is available.
-            try {
-                var facts = JSON.parse(output.trim());
-                if (facts.sessionId !== session && !facts.error) facts = { error: 'console-changed' };
-                finish(facts);
-            } catch (ignore) { }
-
-        });
+        child = require('child_process').execFile(process.execPath,
+            [process.execPath.split("\\").pop(), "-b64exec", encoded], { type: 2 });
+        child.stdout.on('data', function () { });
         child.stderr.on('data', function () { });
-        child.on('exit', function () {
-            if (done) return;
-            try {
-                var facts = JSON.parse(output.trim());
-                if (facts.sessionId !== session && !facts.error) facts = { error: 'console-changed' };
-                finish(facts);
-            } catch (ignore) { finish({ error: 'invalid-response' }); }
-        });
-        // Match MeshAgent's win-deskutils: some Windows builds only pump these
-        // cross-session process pipes during waitExit. The wait is bounded.
-        child.waitExit(6000);
     } catch (ignore) { finish({ error: 'native-unavailable' }); }
 }
 
@@ -176,5 +187,5 @@ module.exports.consoleaction = function (command, rights) {
     probe(function (facts) {
         require('MeshAgent').SendCommand({ action: 'plugin', plugin: 'massenter', operation: 'probeResult',
             probeToken: command.probeToken, facts: facts });
-    });
+    }, command.probeToken);
 };
