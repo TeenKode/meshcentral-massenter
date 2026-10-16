@@ -1,7 +1,7 @@
 {
   "name": "Mass Enter",
   "shortName": "massenter",
-  "version": "0.1.3",
+  "version": "0.1.2",
   "author": "TeenKode",
   "description": "Send Enter twice over the normal MeshCentral KVM channel to selected devices. No AutoLogon and no credentials stored.",
   "hasAdminPanel": false,
@@ -9,7 +9,6 @@
   "changelogUrl": "https://raw.githubusercontent.com/TeenKode/meshcentral-massenter/main/CHANGELOG.md",
   "configUrl": "https://raw.githubusercontent.com/TeenKode/meshcentral-massenter/main/config.json",
   "downloadUrl": "https://github.com/TeenKode/meshcentral-massenter/archive/refs/heads/main.zip",
-
   "repository": {
     "type": "git",
     "url": "https://github.com/TeenKode/meshcentral-massenter.git"
