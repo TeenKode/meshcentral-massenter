@@ -9,7 +9,7 @@
    ```
 
 4. Install/enable **Mass Enter**.
-5. Reload the MeshCentral web interface if necessary.
+5. After installing/upgrading, click **Refresh Agent Cores** in the plugin manager to deliver the Windows session probe module. Reload the MeshCentral web interface.
 6. Open **My Devices**, select computers and click **Вход (Enter×2)**.
 
 ## Direct repository links

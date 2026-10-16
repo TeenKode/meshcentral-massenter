@@ -3,7 +3,7 @@
  * Sends Enter, waits, then sends Enter again to selected devices through
  * the normal MeshCentral KVM channel.
  *
- * Version: 0.2.0
+ * Version: 0.3.0
  */
 "use strict";
 
@@ -35,7 +35,9 @@ module.exports.massenter = function (parent) {
         'saveSettings',
         'cancelBatch',
         'retryErrors',
-        'getSessionHint'
+        'getSessionHint',
+        'checkSelectedSessions',
+        'onSessionProbe'
     ];
 
     obj.normalizeSettings = function (settings) {
@@ -51,7 +53,9 @@ module.exports.massenter = function (parent) {
 
     // userid is supplied by MeshCentral's authenticated session, never by the client.
     // Store outside the plugin directory so upgrades preserve preferences.
-    obj.serveraction = function (command, session) {
+    obj.serveraction = function (command, session, webserver) {
+        if (command && command.operation === 'probeResult') { obj.receiveSessionProbe(command, session); return; }
+        if (command && command.operation === 'checkSession') { obj.checkSession(command, session, webserver); return; }
         if (!session || !session.user || typeof session.user._id !== 'string') return;
         if (!command || typeof command.requestId !== 'string' || command.requestId.length > 100) return;
         if (command.operation !== 'getSettings' && command.operation !== 'saveSettings') return;
@@ -75,6 +79,122 @@ module.exports.massenter = function (parent) {
                 });
             }
         } catch (e) { reply('Серверное хранилище настроек недоступно'); }
+    };
+
+    obj.checkSession = function (command, session, webserver) {
+        if (!session || !session.user || !session.domain || typeof command.requestId !== 'string' || command.requestId.length > 100) return;
+        function reply(state, reason) {
+            session.send({ action: 'plugin', plugin: 'massenter', method: 'onSessionProbe',
+                requestId: command.requestId, nodeid: command.nodeid, result: { state: state, reason: reason, checkedAt: Date.now() } });
+        }
+        if (typeof command.nodeid !== 'string' || command.nodeid.length > 200 ||
+            command.nodeid.indexOf('node/' + session.domain.id + '/') !== 0) { reply('unknown', 'Нет доступа к устройству'); return; }
+        if (!webserver || typeof webserver.GetNodeWithRights !== 'function') { reply('unknown', 'API проверки прав недоступен'); return; }
+        webserver.GetNodeWithRights(session.domain, session.user, command.nodeid, function (node, rights, visible) {
+            if (!node || visible === false || (rights & 8) === 0) { reply('unknown', 'Нет права Remote Control'); return; }
+            if (!node.agent || [1, 2, 3, 4, 21, 22, 34, 42, 43].indexOf(node.agent.id) < 0) { reply('unknown', 'Проверка доступна только для Windows'); return; }
+            var agent = webserver.wsagents && webserver.wsagents[command.nodeid];
+            if (!agent || agent.authenticated !== 2) { reply('unknown', 'Агент офлайн или недоступен на этом сервере'); return; }
+            if (!obj.pendingProbes) obj.pendingProbes = Object.create(null);
+            var pending = Object.values(obj.pendingProbes);
+            if (pending.length >= 128 || pending.filter(function (p) { return p.userid === session.user._id; }).length >= 4) {
+                reply('unknown', 'Дождитесь завершения предыдущих проверок'); return;
+            }
+            var token = require('crypto').randomBytes(24).toString('hex');
+            var request = { agent: agent, nodeid: command.nodeid, userid: session.user._id, reply: reply };
+            request.timer = setTimeout(function () {
+                delete obj.pendingProbes[token];
+                reply('unknown', 'Агент не ответил. После обновления плагина нажмите Refresh Agent Cores в менеджере плагинов.');
+            }, 10000);
+            obj.pendingProbes[token] = request;
+            try {
+                agent.send(JSON.stringify({ action: 'plugin', plugin: 'massenter', operation: 'probeSession', probeToken: token, rights: rights }));
+            } catch (e) {
+                clearTimeout(request.timer); delete obj.pendingProbes[token];
+                reply('unknown', 'Не удалось отправить запрос агенту');
+            }
+        });
+    };
+
+    obj.receiveSessionProbe = function (command, agent) {
+        if (!agent || agent.user || agent.authenticated !== 2 || typeof command.probeToken !== 'string' || !obj.pendingProbes) return;
+        var pending = obj.pendingProbes[command.probeToken];
+        if (!pending || pending.agent !== agent || pending.nodeid !== agent.dbNodeKey) return;
+        clearTimeout(pending.timer); delete obj.pendingProbes[command.probeToken];
+        var facts = command.facts;
+        var state = 'unknown';
+        if (facts && typeof facts === 'object' && (facts.username == null || (typeof facts.username === 'string' && facts.username.length <= 256)) &&
+            (facts.desktop == null || (typeof facts.desktop === 'string' && facts.desktop.length <= 64))) {
+            state = require('./modules_meshcore/massenter.js').classifyFacts(facts);
+        }
+        var reasons = {
+            signin: 'Защищённый рабочий стол входа; в консольном сеансе нет пользователя.',
+            locked: 'Windows сообщает о заблокированном консольном сеансе и защищённом рабочем столе.',
+            unlocked: 'В консольном сеансе есть пользователь, сеанс разблокирован, активен Default.',
+            secure: 'Пользователь вошёл; активен защищённый рабочий стол — возможен UAC или переход.',
+            unknown: 'Не удалось достоверно прочитать состояние консольного сеанса и активного рабочего стола.'
+        };
+        if (facts && facts.error === 'not-windows') reasons.unknown = 'Проверка доступна только для Windows';
+        if (facts && facts.error === 'timeout') reasons.unknown = 'Проверка Windows не завершилась за 6 секунд; повторите запрос';
+        if (facts && facts.error === 'invalid-response') reasons.unknown = 'Агент вернул неполные данные о состоянии Windows';
+        if (facts && facts.error === 'desktop-unavailable') reasons.unknown = 'Windows не разрешила прочитать активный рабочий стол';
+        if (facts && facts.error === 'wts-unavailable') reasons.unknown = 'Windows не предоставила сведения о консольном сеансе';
+        if (facts && facts.error === 'console-changed') reasons.unknown = 'Консольный сеанс изменился во время проверки';
+        if (facts && facts.error === 'busy') reasons.unknown = 'Агент уже выполняет проверку; повторите позже';
+        pending.reply(state, reasons[state]);
+    };
+
+    obj.checkSelectedSessions = function () {
+        var me = pluginHandler.massenter;
+        var panel = document.getElementById('massEnterConfirmation');
+        var rows = me.sessionRows;
+        if (!panel || !rows || (me.sessionCheck && me.sessionCheck.panel === panel && me.sessionCheck.running)) return;
+        var button = document.getElementById('massEnterCheckSessions');
+        var status = document.getElementById('massEnterSessionStatus');
+        var check = { panel: panel, queue: Object.keys(rows), active: 0, done: 0, total: Object.keys(rows).length, running: true };
+        me.sessionCheck = check;
+        if (!me.sessionProbeRequests) me.sessionProbeRequests = {};
+        button.disabled = true;
+        status.textContent = 'Чтение состояния Windows через агент…';
+        var pumping = false;
+        function pump() {
+            if (pumping) return;
+            if (document.getElementById('massEnterConfirmation') !== panel) { check.running = false; return; }
+            pumping = true;
+            while (check.active < 4 && check.queue.length) {
+                (function (id) {
+                    check.active++;
+                    var requestId = 'probe-' + String((me.sessionProbeId || 0) + 1);
+                    me.sessionProbeId = (me.sessionProbeId || 0) + 1;
+                    var pending = { nodeid: id, finish: function (result) {
+                        check.active--; check.done++;
+                        if (document.getElementById('massEnterConfirmation') !== panel) return;
+                        var labels = { signin: 'Экран входа / приветствие', locked: 'Сеанс заблокирован',
+                            unlocked: 'Пользователь вошёл, сеанс разблокирован', secure: 'Защищённый экран (UAC / переход)', unknown: 'Неизвестно' };
+                        var node = me.getNode(id);
+                        rows[id].textContent = (node && node.name ? node.name : id) + ' — ' + (labels[result.state] || labels.unknown) +
+                            '. ' + (result.reason || '') + ' Проверено: ' + new Date(result.checkedAt || Date.now()).toLocaleTimeString();
+                        pump();
+                    } };
+                    pending.timer = setTimeout(function () { me.onSessionProbe(null, { requestId: requestId, result: { state: 'unknown', reason: 'Сервер не ответил' } }); }, 12000);
+                    me.sessionProbeRequests[requestId] = pending;
+                    try { meshserver.send({ action: 'plugin', plugin: 'massenter', operation: 'checkSession', nodeid: id, requestId: requestId }); }
+                    catch (e) { me.onSessionProbe(null, { requestId: requestId, result: { state: 'unknown', reason: 'Нет связи с сервером' } }); }
+                })(check.queue.shift());
+            }
+            pumping = false;
+            status.textContent = 'Проверено ' + check.done + ' из ' + check.total + '. Состояние на момент проверки; компьютеры не отфильтрованы.';
+            if (check.active === 0 && check.queue.length === 0) { check.running = false; button.disabled = false; }
+        }
+        pump();
+    };
+
+    obj.onSessionProbe = function (server, message) {
+        var me = pluginHandler.massenter;
+        var pending = me.sessionProbeRequests && me.sessionProbeRequests[message.requestId];
+        if (!pending) return;
+        clearTimeout(pending.timer); delete me.sessionProbeRequests[message.requestId];
+        pending.finish(message.result || { state: 'unknown', reason: 'Ответ без данных' });
     };
 
     obj.requestSettings = function (operation, settings, callback) {
@@ -151,8 +271,8 @@ module.exports.massenter = function (parent) {
     };
 
     obj.server_startup = function () {
-        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.2.0 loaded'); }
-        catch (e) { console.log('MeshCentral Mass Enter plugin 0.2.0 loaded'); }
+        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.3.0 loaded'); }
+        catch (e) { console.log('MeshCentral Mass Enter plugin 0.3.0 loaded'); }
     };
 
     obj.onWebUIStartupEnd = function () {
@@ -269,15 +389,27 @@ module.exports.massenter = function (parent) {
         var list = document.createElement('div');
         list.style.cssText = 'margin:10px 0;max-height:150px;overflow:auto;font-size:12px';
         var info = document.createElement('div');
-        info.textContent = 'Сведения агента о сеансах (не распознавание экрана входа):';
+        info.textContent = 'Сведения агента (до проверки — предварительные):';
         list.appendChild(info);
+        pluginHandler.massenter.sessionRows = Object.create(null);
         ids.forEach(function (id) {
             var node = pluginHandler.massenter.getNode(id);
             var line = document.createElement('div');
             line.textContent = (node && node.name ? node.name : id) + ' — ' + pluginHandler.massenter.getSessionHint(node);
             list.appendChild(line);
+            pluginHandler.massenter.sessionRows[id] = line;
         });
-        document.getElementById('massEnterConfirmation').appendChild(list);
+        var panel = document.getElementById('massEnterConfirmation');
+        panel.appendChild(list);
+        var checkButton = document.createElement('button');
+        checkButton.id = 'massEnterCheckSessions'; checkButton.type = 'button';
+        checkButton.textContent = 'Проверить экран входа';
+        checkButton.onclick = function () { pluginHandler.massenter.checkSelectedSessions(); };
+        panel.appendChild(checkButton);
+        var status = document.createElement('div');
+        status.id = 'massEnterSessionStatus'; status.setAttribute('aria-live', 'polite');
+        status.textContent = 'Проверка читает состояние Windows без отправки клавиш. Она не распознаёт изображение экрана.';
+        panel.appendChild(status);
         pluginHandler.massenter.loadSettings();
     };
 

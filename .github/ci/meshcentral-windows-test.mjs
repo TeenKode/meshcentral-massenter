@@ -53,6 +53,56 @@ try {
   if (!checkboxValue || !checkboxValue.startsWith('devid_')) throw new Error(`Unexpected device checkbox value: ${checkboxValue}`);
   const nodeid = checkboxValue.substring(6);
 
+  // Mirror the documented post-upgrade step. The downloaded agent may start
+  // with an embedded core; explicitly distribute the server core with plugins.
+  await page.evaluate(id => meshserver.send({ action: 'distributeCore', nodes: [{ _id: id }] }), nodeid);
+  async function agentModules() {
+    return page.evaluate(id => new Promise((resolve, reject) => {
+      const previous = meshserver.onMessage;
+      const timer = setTimeout(() => { meshserver.onMessage = previous; reject(new Error('Agent modules query timed out')); }, 10000);
+      meshserver.onMessage = function (server, message) {
+        if (message.action === 'msg' && message.type === 'console' && message.nodeid === id) {
+          clearTimeout(timer); meshserver.onMessage = previous; resolve(message.value);
+        }
+        return previous.apply(this, arguments);
+      };
+      meshserver.send({ action: 'msg', type: 'console', nodeid: id, value: 'modules' });
+    }), nodeid);
+  }
+  let modules = '';
+  for (let i = 0; i < 15; i++) {
+    await page.waitForTimeout(1000);
+    try { modules = await agentModules(); } catch (e) { console.log(String(e)); }
+    if (modules.includes('massenter')) break;
+  }
+  console.log('Agent probe module delivered:', modules.includes('massenter'));
+  if (!modules.includes('massenter')) throw new Error('Probe module was not delivered in the refreshed agent core: ' + modules);
+
+  await page.evaluate(() => {
+    const previous = meshserver.onMessage;
+    meshserver.onMessage = function (server, message) {
+      if (message.action === 'msg' && message.type === 'console') console.log('Agent diagnostic:', message.value);
+      return previous.apply(this, arguments);
+    };
+  });
+
+  // Exercise the real module delivered inside the MeshAgent core. The hosted
+  // runner has an interactive, unlocked console for the keyboard sink below.
+  const sessionProbe = await page.evaluate(id => new Promise((resolve, reject) => {
+    const me = pluginHandler.massenter;
+    const requestId = 'ci-native-console-probe';
+    if (!me.sessionProbeRequests) me.sessionProbeRequests = {};
+    me.sessionProbeRequests[requestId] = {
+      timer: setTimeout(() => reject(new Error('Native probe response timed out')), 15000),
+      finish: resolve
+    };
+    meshserver.send({ action: 'plugin', plugin: 'massenter', operation: 'checkSession', nodeid: id, requestId });
+  }), nodeid);
+  console.log('Real Windows console probe:', JSON.stringify(sessionProbe));
+  if (sessionProbe.state !== 'unlocked') {
+    throw new Error('Expected unlocked interactive console; probe returned ' + JSON.stringify(sessionProbe));
+  }
+
   // Native MeshCentral Desktop control test. This proves the Windows runner,
   // MeshAgent service and keyboard event sink are a valid KVM input path.
   await page.evaluate((id) => {

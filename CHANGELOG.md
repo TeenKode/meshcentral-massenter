@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Adds an explicit read-only Windows sign-in check through a bundled MeshAgent module.
+- Reads the physical console session username, connection/lock flags, and input desktop with Win32 APIs from a short-lived hidden console-session helper.
+- Distinguishes sign-in/welcome, locked, unlocked, and secure desktop/UAC states. Ambiguous, changing, unsupported, or inaccessible states return Unknown.
+- Verifies device/domain permissions on the server and binds replies to the authenticated agent connection using a random one-use token. Bounds probe concurrency and timeouts.
+- Shows per-device results with timestamps. Does not send keys, switch desktops, or automatically change the selected devices during a check.
+- Requires Refresh Agent Cores after upgrade to distribute the new agent module.
+
 ## 0.2.0
 
 - Adds Stop to cancel queued and active work, clear pending key timers, and close KVM relays. Already sent input cannot be undone.

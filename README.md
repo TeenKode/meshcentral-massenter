@@ -1,6 +1,6 @@
 # MeshCentral Mass Enter
 
-Current version: **0.2.0**
+Current version: **0.3.0**
 
 MeshCentral plugin for one-time mass keyboard input on Windows sign-in screens.
 
@@ -71,15 +71,38 @@ lets you save without sending keys. Preferences survive browser changes, server
 restarts, and plugin upgrades. Saving/loading failures are displayed explicitly.
 The batch itself runs in the browser and does not continue after the tab closes.
 
-## Windows session hints
+## Windows sign-in check
 
-Confirmation lists each selected device with the agent's reported `users` and
-`lusers` information: no active users, a reported locked session, an existing
-user session, offline, or unavailable data. These are hints, not screen detection.
-No active user can suggest a sign-in screen; a reported user can belong to a
-locked or remote session. Older agents and Windows versions may omit lock data.
-The hints do not automatically filter devices or confirm successful Windows login.
-For a definitive check of the visible screen, open the native Desktop preview.
+Click **Проверить экран входа** in confirmation to query each selected Windows
+computer through MeshAgent. The probe reads the physical console session using
+WTS APIs and the active input desktop using `OpenInputDesktop`. It uses a short,
+hidden SYSTEM helper in that console session because a service in session 0
+cannot read the interactive input desktop directly. It sends no keys, does not
+switch or unlock desktops, stores no screenshots, and installs no service/task.
+
+Results include the time of the check:
+
+- **Экран входа / приветствие**: a stable console session has no logged-in username and its input desktop is Winlogon.
+- **Сеанс заблокирован**: the console user is present, WTS reports locked, and the input desktop is Winlogon.
+- **Пользователь вошёл, сеанс разблокирован**: the console user is present, WTS reports unlocked, and the input desktop is Default.
+- **Защищённый экран (UAC / переход)**: a logged-in, unlocked console session is on Winlogon. This is not treated as a sign-in screen.
+- **Неизвестно**: permissions/API data are unavailable, the console changes during the check, results contradict each other, or a request times out.
+
+This reports Windows session/desktop state at that instant, not the exact visible
+picture or readiness of a particular credential field. Results can change before
+keys are sent. RDP sessions do not substitute for the physical console. Initial
+user-list hints remain preliminary until the explicit check finishes. Checking
+does not automatically filter the selection or confirm login after sending Enter.
+
+The server verifies Remote Control permission for each device and binds responses
+to that authenticated agent connection. Up to four probes run at once per user.
+A disconnected/older agent returns Unknown; no success is guessed.
+
+**After upgrading to 0.3.0, use Refresh Agent Cores in the plugin manager** to
+deliver `modules_meshcore/massenter.js` to agents. If necessary restart MeshCentral
+before refreshing cores, then reload the browser. Windows MeshAgent must run as
+a service with the privileges required to inspect the console. No additional
+endpoint software is needed.
 
 ## Testing
 

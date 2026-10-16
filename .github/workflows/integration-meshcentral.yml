@@ -18,6 +18,7 @@ jobs:
           set -euxo pipefail
           mkdir -p .ci-data/plugins/massenter
           cp massenter.js config.json .ci-data/plugins/massenter/
+          cp -r modules_meshcore .ci-data/plugins/massenter/
           cat > .ci-data/config.json <<'JSON'
           {
             "settings": {
