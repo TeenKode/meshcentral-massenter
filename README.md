@@ -1,6 +1,6 @@
 # MeshCentral Mass Enter
 
-Current version: **0.1.2**
+Current version: **0.1.3**
 
 MeshCentral plugin for one-time mass keyboard input on Windows sign-in screens.
 
@@ -45,7 +45,7 @@ MeshCentral reads `config.json`, compares the published plugin version with the 
 4. Change the delay or concurrency if necessary.
 5. Confirm.
 
-MeshCentral itself closes the confirmation dialog before invoking the plugin callback. Mass Enter does not close that modal a second time. Progress is displayed in a non-blocking floating panel so the rest of the MeshCentral interface remains usable. The panel reports `OK`, `SKIP`, or `ERR` for every processed device.
+Confirmation opens in a separate non-modal panel with explicit Send and Cancel buttons. It does not change MeshCentral's shared dialog state, so the rest of the interface stays usable before, during, and after a batch. Progress appears in a floating panel and reports `OK`, `SKIP`, or `ERR` for every processed device.
 
 An `OK` result is only produced after a real Remote Desktop screen-size event has initialized the KVM channel and both Enter sequences have been written to that channel. If the relay opens but the desktop stream does not initialize, the device is reported as an error instead of a false success.
 

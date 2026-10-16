@@ -92,11 +92,11 @@ try {
   await page.locator('#massEnterDelay').fill('700');
   await page.locator('#massEnterConcurrency').fill('1');
 
-  await page.locator('#idx_dlgOkButton').click();
+  await page.locator('#massEnterConfirmButton').click();
   await page.waitForSelector('#massEnterProgressPanel', { state: 'visible', timeout: 10000 });
 
   const dialogMode = await page.evaluate(() => (typeof xxdialogMode === 'undefined' ? null : xxdialogMode));
-  if (dialogMode !== 0) {
+  if (dialogMode) {
     throw new Error(`MeshCentral modal remained active after Mass Enter start: xxdialogMode=${dialogMode}`);
   }
 
@@ -121,7 +121,7 @@ try {
   // Prove the normal MeshCentral toolbar is still interactive after Mass Enter.
   const groupAction = page.locator('#GroupActionButton');
   await groupAction.click({ timeout: 10000 });
-  await page.waitForFunction(() => typeof xxdialogMode !== 'undefined' && xxdialogMode !== 0, { timeout: 5000 });
+  await page.waitForFunction(() => !!xxdialogMode, { timeout: 5000 });
   console.log('Standard Group Action dialog opened after Mass Enter; UI is not blocked');
   const cancel = page.locator('#idx_dlgCancelButton');
   if (await cancel.isVisible()) await cancel.click();

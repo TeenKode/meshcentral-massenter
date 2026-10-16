@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Moves confirmation and empty-selection messages into a separate non-modal plugin panel. Clicking Mass Enter no longer changes MeshCentral's global modal state or blocks its toolbar.
+- Adds explicit Send and Cancel buttons and clears pending selections on close.
+- Fixes integration assertions to accept MeshCentral's actual closed-dialog state (`undefined` as well as `0`).
+
 ## 0.1.2
 
 - Removes the redundant second `setDialogMode()` call from the dialog callback. MeshCentral closes its modal before invoking the callback, so closing it again can corrupt dialog/UI state on some versions.

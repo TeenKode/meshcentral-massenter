@@ -3,7 +3,7 @@
  * Sends Enter, waits, then sends Enter again to selected devices through
  * the normal MeshCentral KVM channel.
  *
- * Version: 0.1.2
+ * Version: 0.1.3
  */
 "use strict";
 
@@ -18,6 +18,8 @@ module.exports.massenter = function (parent) {
         'getNode',
         'getEligibility',
         'openDialog',
+        'showConfirmation',
+        'closeConfirmation',
         'runSelected',
         'startBatch',
         'runOne',
@@ -28,8 +30,8 @@ module.exports.massenter = function (parent) {
     ];
 
     obj.server_startup = function () {
-        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.1.2 loaded'); }
-        catch (e) { console.log('MeshCentral Mass Enter plugin 0.1.2 loaded'); }
+        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.1.3 loaded'); }
+        catch (e) { console.log('MeshCentral Mass Enter plugin 0.1.3 loaded'); }
     };
 
     obj.onWebUIStartupEnd = function () {
@@ -118,11 +120,7 @@ module.exports.massenter = function (parent) {
     obj.openDialog = function () {
         var ids = pluginHandler.massenter.getSelectedNodeIds();
         if (!ids || ids.length === 0) {
-            if (typeof setDialogMode === 'function') {
-                setDialogMode(2, 'Массовый вход', 1, null, 'Сначала отметьте компьютеры в разделе «My Devices».');
-            } else {
-                alert('Сначала отметьте компьютеры.');
-            }
+            pluginHandler.massenter.showConfirmation('Сначала отметьте компьютеры в разделе «My Devices».', false);
             return;
         }
 
@@ -131,8 +129,6 @@ module.exports.massenter = function (parent) {
             var e = pluginHandler.massenter.getEligibility(ids[i]);
             if (e.ok) eligible++; else skipped++;
         }
-
-        pluginHandler.massenter.pendingNodeIds = ids.slice();
 
         var html = '<div style="max-width:520px;line-height:1.45">';
         html += '<b>Будет отправлено два нажатия Enter через обычный MeshCentral KVM.</b><br><br>';
@@ -145,11 +141,42 @@ module.exports.massenter = function (parent) {
         html += '<br><br><span style="color:#a04000"><b>Важно:</b> запускайте только для компьютеров, находящихся на экране входа Windows.</span>';
         html += '</div>';
 
-        if (typeof setDialogMode === 'function') {
-            setDialogMode(2, 'Массовый вход: Enter → Enter', 3, pluginHandler.massenter.runSelected, html);
-        } else if (confirm('Отправить Enter два раза на ' + eligible + ' устройств?')) {
-            pluginHandler.massenter.startBatch(ids, 1000, 6);
+        pluginHandler.massenter.showConfirmation(html, true);
+        pluginHandler.massenter.pendingNodeIds = ids.slice();
+    };
+
+    // Keep plugin confirmation independent of MeshCentral's global modal state.
+    // A hidden/unsupported native dialog can otherwise disable the whole toolbar.
+    obj.showConfirmation = function (html, canRun) {
+        pluginHandler.massenter.closeConfirmation();
+        var panel = document.createElement('section');
+        panel.id = 'massEnterConfirmation';
+        panel.setAttribute('role', 'region');
+        panel.setAttribute('aria-label', 'Массовый вход');
+        panel.style.cssText = 'position:fixed;right:18px;top:80px;width:430px;max-width:calc(100vw - 56px);max-height:calc(100vh - 120px);overflow:auto;z-index:999;background:#fff;color:#222;border:1px solid #888;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.28);padding:10px';
+        panel.innerHTML = '<b>Массовый вход</b><div style="margin:12px 0">' + html + '</div>';
+        if (canRun) {
+            var start = document.createElement('button');
+            start.type = 'button';
+            start.id = 'massEnterConfirmButton';
+            start.textContent = 'Отправить Enter ×2';
+            start.onclick = function () { pluginHandler.massenter.runSelected(); };
+            panel.appendChild(start);
         }
+        var cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.id = 'massEnterCancelButton';
+        cancel.textContent = canRun ? 'Отмена' : 'Закрыть';
+        cancel.onclick = function () { pluginHandler.massenter.closeConfirmation(); };
+        panel.appendChild(cancel);
+        document.body.appendChild(panel);
+        (canRun ? start : cancel).focus();
+    };
+
+    obj.closeConfirmation = function () {
+        var panel = document.getElementById('massEnterConfirmation');
+        if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+        pluginHandler.massenter.pendingNodeIds = null;
     };
 
     obj.runSelected = function () {
@@ -168,9 +195,7 @@ module.exports.massenter = function (parent) {
         delay = Math.max(300, Math.min(5000, delay));
         concurrency = Math.max(1, Math.min(20, concurrency));
 
-        // MeshCentral's dialogclose() closes the modal before invoking this callback.
-        // Do not call setDialogMode() again here: double-closing can corrupt dialog state
-        // on some MeshCentral versions/UI variants.
+        pluginHandler.massenter.closeConfirmation();
         pluginHandler.massenter.ensureProgressPanel();
         pluginHandler.massenter.startBatch(ids, delay, concurrency);
     };

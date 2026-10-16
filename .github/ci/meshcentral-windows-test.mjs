@@ -100,7 +100,7 @@ try {
   await page.waitForSelector('#massEnterDelay', { timeout: 10000 });
   await page.locator('#massEnterDelay').fill('700');
   await page.locator('#massEnterConcurrency').fill('1');
-  await page.locator('#idx_dlgOkButton').click();
+  await page.locator('#massEnterConfirmButton').click();
 
   await page.waitForSelector('#massEnterProgressPanel', { state: 'visible', timeout: 10000 });
   await page.waitForSelector('#dialog', { state: 'hidden', timeout: 5000 });

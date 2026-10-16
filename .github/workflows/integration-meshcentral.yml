@@ -136,6 +136,11 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install chromium
 
+      - name: Check non-modal confirmation and KVM lifecycle
+        env:
+          TEST_CA_CERT: .ci-data/webserver-cert-public.crt
+        run: node .github/ci/confirmation-test.mjs
+
       - name: Compare Mass Enter with native MeshCentral KVM
         run: node .github/ci/meshcentral-ui-test.mjs
 
