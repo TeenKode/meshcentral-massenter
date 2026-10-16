@@ -51,9 +51,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker run -d --name meshcentral-test --network host -e DYNAMIC_CONFIG=false \
+          docker run -d --name meshcentral-test --network host --entrypoint node \
             -v "$PWD/.ci-data:/opt/meshcentral/meshcentral-data" \
-            ghcr.io/ylianst/meshcentral:1.2.6
+            ghcr.io/ylianst/meshcentral:1.2.6 \
+            /opt/meshcentral/meshcentral/meshcentral \
+            --configfile /opt/meshcentral/meshcentral-data/config.json \
+            --user admin
           for i in $(seq 1 60); do
             curl -kfsS https://localhost/ >/dev/null && break
             docker inspect -f '{{.State.Running}}' meshcentral-test | grep -q true
@@ -87,11 +90,7 @@ jobs:
           MESHIDHEX="$(cat .ci-meshidhex)"
           mkdir -p .ci-agent
           curl -kfsS 'https://localhost/meshagents?id=6' -o .ci-agent/meshagent
-          curl -kfsS -L -c .ci-cookies.txt \
-            -d 'action=login' -d 'username=admin' -d 'password=MassEnter-Test-123!' \
-            https://localhost/ -o /dev/null
-          curl -kfsS -b .ci-cookies.txt \
-            "https://localhost/meshsettings?id=${MESHIDHEX}" -o .ci-agent/meshagent.msh
+          curl -kfsS "https://localhost/meshsettings?id=${MESHIDHEX}" -o .ci-agent/meshagent.msh
           test -s .ci-agent/meshagent
           test -s .ci-agent/meshagent.msh
           chmod +x .ci-agent/meshagent
