@@ -162,3 +162,50 @@ test('helper embeds original module source rather than Duktape function placehol
     assert.ok(Buffer.from(script).toString('base64').length < 24000);
     assert.throws(() => buildProbeScript('2);malicious()', source), /invalid-probe-script/);
 });
+
+
+function agentHarness() {
+    const handlers = {}, output = [], timers = new Map();
+    let next = 0, killed = 0;
+    const child = { stdout: { on(event, fn) { handlers.stdout = fn; } }, stderr: { on() {} },
+        on(event, fn) { handlers[event] = fn; }, kill() { killed++; } };
+    const source = fs.readFileSync(require.resolve('../modules_meshcore/massenter.js'), 'utf8');
+    const context = vm.createContext({ module: { exports: {} }, Buffer, console,
+        process: { platform: 'win32', execPath: 'C:\\MeshAgent.exe' }, getJSModule() { return source; },
+        require(name) {
+            if (name === 'user-sessions') return { consoleUid: () => 2 };
+            if (name === 'child_process') return { execFile() { return child; } };
+            throw new Error(name);
+        },
+        setTimeout(fn) { const id = ++next; timers.set(id, fn); return id; },
+        clearTimeout(id) { if (!timers.delete(id)) throw new Error('Invalid Parameter'); }
+    });
+    vm.runInContext(source, context);
+    context.module.exports.probe(facts => output.push(facts));
+    return { handlers, output, timers, killed: () => killed,
+        expire() { const [id, fn] = [...timers][0]; timers.delete(id); fn(); } };
+}
+
+test('MeshAgent watchdog never clears its own expired native timer', () => {
+    const h = agentHarness();
+    h.expire();
+    assert.equal(h.output.length, 1);
+    assert.equal(h.output[0].error, 'timeout');
+    assert.equal(h.killed(), 1);
+    h.handlers.exit();
+    assert.equal(h.output.length, 1);
+});
+
+test('complete JSON stdout resolves before the child exit event; split output is supported', () => {
+    const h = agentHarness();
+    const json = JSON.stringify({ ...unlocked, sessionId: 2, processSessionId: 2 });
+    h.handlers.stdout(Buffer.from(json.slice(0, 20)));
+    assert.equal(h.output.length, 0);
+    h.handlers.stdout(Buffer.from(json.slice(20)));
+    assert.equal(h.output.length, 1);
+    assert.equal(h.output[0].desktop, 'Default');
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.killed(), 1);
+    h.handlers.exit();
+    assert.equal(h.output.length, 1);
+});

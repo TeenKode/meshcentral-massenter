@@ -124,7 +124,8 @@ function probe(callback) {
     function finish(facts) {
         if (done) return;
         done = true; busy = false;
-        if (timer) clearTimeout(timer);
+        try { if (timer) clearTimeout(timer); } catch (ignore) { }
+        timer = null;
         try { if (child) child.kill(); } catch (ignore) { }
         callback(facts);
     }
@@ -137,10 +138,18 @@ function probe(callback) {
         if (encoded.length > 24000) throw new Error('probe-script-too-large');
         child = require('child_process').execFile(process.execPath,
             [process.execPath.split('\\').pop(), '-b64exec', encoded], { type: 2 });
-        timer = setTimeout(function () { finish({ error: 'timeout' }); }, 6000);
+        timer = setTimeout(function () { timer = null; finish({ error: 'timeout' }); }, 6000);
         child.stdout.on('data', function (data) {
             output += data.toString();
-            if (output.length > 8192) finish({ error: 'invalid-response' });
+            if (output.length > 8192) { finish({ error: 'invalid-response' }); return; }
+            // Some MeshAgent builds delay the child exit event. The helper has
+            // one bounded JSON response; complete as soon as it is available.
+            try {
+                var facts = JSON.parse(output.trim());
+                if (facts.sessionId !== session && !facts.error) facts = { error: 'console-changed' };
+                finish(facts);
+            } catch (ignore) { }
+
         });
         child.stderr.on('data', function () { });
         child.on('exit', function () {
