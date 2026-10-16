@@ -132,6 +132,12 @@ jobs:
             Invoke-WebRequest -Uri "https://localhost:4443/meshsettings?id=$encoded" -SkipCertificateCheck -OutFile .ci-agent\meshagent.msh
             if ((Get-Item .ci-agent\meshagent.exe).Length -lt 100000) { throw 'Downloaded Windows MeshAgent is unexpectedly small' }
 
+            # Validate native APIs directly in the real MeshAgent JS runtime.
+            node .github\ci\prepare-native-probe.cjs
+            $nativeProbe = Get-Content .ci-native-probe.b64 -Raw
+            & .ci-agent\meshagent.exe -b64exec $nativeProbe
+            if ($LASTEXITCODE -ne 0) { throw "Direct native API probe failed" }
+
             Push-Location .ci-agent
             & .\meshagent.exe -fullinstall
             $agentExit = $LASTEXITCODE

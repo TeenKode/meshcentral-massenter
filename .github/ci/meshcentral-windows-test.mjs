@@ -78,6 +78,14 @@ try {
   console.log('Agent probe module delivered:', modules.includes('massenter'));
   if (!modules.includes('massenter')) throw new Error('Probe module was not delivered in the refreshed agent core: ' + modules);
 
+  await page.evaluate(() => {
+    const previous = meshserver.onMessage;
+    meshserver.onMessage = function (server, message) {
+      if (message.action === 'msg' && message.type === 'console') console.log('Agent diagnostic:', message.value);
+      return previous.apply(this, arguments);
+    };
+  });
+
   // Exercise the real module delivered inside the MeshAgent core. The hosted
   // runner has an interactive, unlocked console for the keyboard sink below.
   const sessionProbe = await page.evaluate(id => new Promise((resolve, reject) => {
