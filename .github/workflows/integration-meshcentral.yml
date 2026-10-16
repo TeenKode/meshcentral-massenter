@@ -71,7 +71,6 @@ jobs:
             --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter CI'
           docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js ListDeviceGroups \
             --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json --hex > .ci-groups.json
-          cat .ci-groups.json
           python3 - <<'PY'
           import json
           groups=json.load(open('.ci-groups.json'))
@@ -88,12 +87,14 @@ jobs:
           MESHIDHEX="$(cat .ci-meshidhex)"
           mkdir -p .ci-agent
           curl -kfsS 'https://localhost/meshagents?id=6' -o .ci-agent/meshagent
-          curl -kfsS "https://localhost/meshsettings?id=${MESHIDHEX}" -o .ci-agent/meshagent.msh
+          curl -kfsS -L -c .ci-cookies.txt \
+            -d 'action=login' -d 'username=admin' -d 'password=MassEnter-Test-123!' \
+            https://localhost/ -o /dev/null
+          curl -kfsS -b .ci-cookies.txt \
+            "https://localhost/meshsettings?id=${MESHIDHEX}" -o .ci-agent/meshagent.msh
           test -s .ci-agent/meshagent
           test -s .ci-agent/meshagent.msh
           chmod +x .ci-agent/meshagent
-          echo '--- meshagent.msh ---'
-          sed -E 's/(ServerID=).*/\1<redacted>/' .ci-agent/meshagent.msh
 
       - name: Start X11 desktop and MeshAgent
         shell: bash
