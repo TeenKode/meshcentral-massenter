@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2
+
+- Removes the redundant second `setDialogMode()` call from the dialog callback. MeshCentral closes its modal before invoking the callback, so closing it again can corrupt dialog/UI state on some versions.
+- Removes the blind timed KVM fallback that could report success before the remote desktop stream was initialized.
+- Requires a real KVM screen-size event before either Enter key is sent.
+- Reports an error instead of false success when the KVM relay connects but the screen/input channel never initializes.
+- Verifies both relay state and Remote Desktop module state before sending keyboard packets.
+- Aligns Remote Desktop setup more closely with MeshCentral's native Desktop implementation.
+- Adds an end-to-end GitHub Actions integration harness using real MeshCentral 1.2.6, a real MeshAgent, Chromium, and an X11 keyboard event sink.
+- Adds a native MeshCentral Desktop control test so the harness can distinguish plugin bugs from limitations of the Linux/Xvfb test desktop.
+
 ## 0.1.1
 
 - Fixes the MeshCentral UI remaining blocked after starting Mass Enter by closing the modal before the batch begins.
