@@ -78,6 +78,7 @@ jobs:
         shell: pwsh
         env:
           MESHCENTRAL_URL: https://localhost:4443/
+          TEST_CA_CERT: .ci-data/webserver-cert-public.crt
           KEY_SINK_LOG: ${{ github.workspace }}\.ci-windows-keys.log
         run: |
           $ErrorActionPreference = 'Stop'
@@ -155,6 +156,9 @@ jobs:
             }
             Get-Content .ci-devices.json -ErrorAction SilentlyContinue
             if (-not $connected) { throw 'Windows MeshAgent did not connect' }
+
+            node .github\ci\confirmation-test.mjs
+            if ($LASTEXITCODE -ne 0) { throw "Plugin controls/settings integration failed" }
 
             node .github\ci\meshcentral-windows-test.mjs
             if ($LASTEXITCODE -ne 0) { throw "Browser integration failed with exit code $LASTEXITCODE" }

@@ -18,7 +18,7 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
-  await page.goto(process.env.MASSENTER_TEST_URL || 'https://localhost/');
+  await page.goto(process.env.MASSENTER_TEST_URL || process.env.MESHCENTRAL_URL || 'https://localhost/');
   await page.locator('#MassEnterButton').waitFor({ state: 'visible' });
 
   // The plugin must remain usable even when a native modal cannot be opened.
@@ -40,6 +40,29 @@ try {
     pluginHandler.massenter.getNode = () => ({ _id: 'node//confirmation-test', name: 'Offline test', conn: 0 });
   });
   await page.locator('#MassEnterButton').click();
+  await page.waitForFunction(() => !document.getElementById('massEnterDelay').disabled);
+  const previousSettings = await page.evaluate(() => pluginHandler.massenter.readSettings());
+  await page.locator('#massEnterDelay').fill('1700');
+  await page.locator('#massEnterConcurrency').fill('3');
+  await page.locator('#massEnterSaveSettings').click();
+  await page.waitForFunction(() => document.getElementById('massEnterSettingsStatus').textContent.includes('сохранены'));
+  // A fresh browser context must read the values from the real server, without
+  // sharing localStorage or cookies with the first page.
+  const fresh = await browser.newPage();
+  await fresh.goto(process.env.MASSENTER_TEST_URL || process.env.MESHCENTRAL_URL || 'https://localhost/');
+  await fresh.locator('#MassEnterButton').waitFor({ state: 'visible' });
+  await fresh.evaluate(() => {
+    pluginHandler.massenter.getSelectedNodeIds = () => ['node//settings-test'];
+    pluginHandler.massenter.getNode = () => ({ name: 'Settings test', conn: 0 });
+  });
+  await fresh.locator('#MassEnterButton').click();
+  await fresh.waitForFunction(() => !document.getElementById('massEnterDelay').disabled);
+  assert.equal(await fresh.locator('#massEnterDelay').inputValue(), '1700');
+  assert.equal(await fresh.locator('#massEnterConcurrency').inputValue(), '3');
+  await fresh.close();
+  await page.evaluate(settings => new Promise((resolve, reject) => {
+    pluginHandler.massenter.requestSettings('saveSettings', settings, error => error ? reject(new Error(error)) : resolve());
+  }), previousSettings);
   await page.locator('#massEnterDelay').fill('700');
   assert.equal(await page.evaluate(() => !!xxdialogMode), false);
   await page.locator('#massEnterCancelButton').click();
@@ -83,6 +106,53 @@ try {
   assert.equal(kvm.state, 0);
 
   await page.evaluate(() => {
+    const me = pluginHandler.massenter;
+    window.controlTest = { redirect: CreateAgentRedirect, eligibility: me.getEligibility,
+      started: [], packets: [], transports: [], failOnce: true };
+    const t = window.controlTest;
+    me.getEligibility = () => ({ ok: true });
+    CreateAgentRedirect = (server, m) => {
+      const r = { m, State: 0,
+        Start(id) {
+          this.id = id; t.started.push(id); this.State = 3; m.parent = this; m.xxStateChange(3); this.onStateChanged(this, 3);
+          if (id === 'bad' && t.failOnce) { t.failOnce = false; this.Stop(); return; }
+          m.onScreenSizeChange(m, 1024, 768);
+        },
+        Stop() { this.State = 0; m.xxStateChange(0); this.onStateChanged(this, 0); },
+        send(data) { t.packets.push({ id: this.id, data: Array.from(data, c => c.charCodeAt(0)) }); }
+      };
+      t.transports.push(r); return r;
+    };
+    me.startBatch(['cancel-a', 'cancel-b', 'never-started'], 1000, 2);
+  });
+  await page.waitForFunction(() => window.controlTest.packets.length === 4);
+  await page.locator('#massEnterStopButton').click();
+  await page.waitForFunction(() => !pluginHandler.massenter.batch.running);
+  await page.waitForTimeout(1300);
+  const cancelled = await page.evaluate(() => ({ started: controlTest.started, count: controlTest.packets.length,
+    cancelled: pluginHandler.massenter.batch.cancelledCount, active: pluginHandler.massenter.batch.active,
+    closed: controlTest.transports.every(r => r.State === 0) }));
+  assert.deepEqual(cancelled, { started: ['cancel-a', 'cancel-b'], count: 4, cancelled: 3, active: 0, closed: true });
+  assert.equal(await page.locator('#MassEnterButton').isEnabled(), true);
+  assert.equal(await page.locator('#massEnterRetryButton').isEnabled(), false);
+
+  await page.evaluate(() => {
+    controlTest.started = []; controlTest.packets = [];
+    pluginHandler.massenter.startBatch(['good', 'bad'], 300, 2);
+  });
+  await page.waitForFunction(() => !pluginHandler.massenter.batch.running);
+  assert.equal(await page.evaluate(() => pluginHandler.massenter.batch.failed), 1);
+  assert.equal(await page.evaluate(() => pluginHandler.massenter.batch.ok), 1);
+  await page.locator('#massEnterRetryButton').click();
+  await page.waitForFunction(() => !pluginHandler.massenter.batch.running);
+  assert.deepEqual(await page.evaluate(() => controlTest.started), ['good', 'bad', 'bad']);
+  assert.equal(await page.evaluate(() => pluginHandler.massenter.batch.ok), 1);
+  await page.evaluate(() => {
+    CreateAgentRedirect = controlTest.redirect;
+    pluginHandler.massenter.getEligibility = controlTest.eligibility;
+  });
+
+  await page.evaluate(() => {
     setDialogMode = window.savedSetDialogMode;
     pluginHandler.massenter.getSelectedNodeIds = window.savedMassEnterSelection;
     pluginHandler.massenter.getNode = window.savedMassEnterNode;
@@ -92,7 +162,7 @@ try {
   await page.locator('#idx_dlgOkButton').click();
   assert.equal(await page.evaluate(() => !!xxdialogMode), false);
   assert.deepEqual(errors, []);
-  console.log('PASS: empty selection, cancellation, confirmation, skip completion, native dialogs, KVM screen readiness, two Enter pairs, transport/canvas cleanup; no browser errors.');
+  console.log('PASS: server preferences across fresh browser contexts, empty selection, confirmation, skip completion, native dialogs, KVM readiness/cleanup, cancellation between keys, retry failures only; no browser errors.');
 } finally {
   await browser.close();
 }

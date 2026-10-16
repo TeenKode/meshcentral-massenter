@@ -16,3 +16,5 @@ jobs:
         run: node -e "JSON.parse(require('fs').readFileSync('config.json','utf8')); console.log('config.json OK')"
       - name: Check JavaScript syntax
         run: node --check massenter.js
+      - name: Test server settings and batch lifecycle
+        run: node --test tests/massenter.test.cjs

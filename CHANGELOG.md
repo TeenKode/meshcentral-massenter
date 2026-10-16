@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- Adds Stop to cancel queued and active work, clear pending key timers, and close KVM relays. Already sent input cannot be undone.
+- Adds retry of failed devices only, retaining the complete failure list beyond the 60 displayed results.
+- Saves delay and concurrency in the MeshCentral database per authenticated user/domain; restores them across browsers, restarts, and plugin upgrades. Adds an explicit Save button and automatic save on start, with errors shown in the UI.
+- Shows per-device Windows session hints from agent users/locked users data, without claiming to detect the sign-in screen or automatically filtering devices.
+- Clarifies that successful Enter transmission does not confirm Windows login.
+- Adds tests for cancellation before/between key presses, transport errors, retry selection, preference isolation and failures, and persistence across fresh browser contexts.
+
 ## 0.1.3
 
 - Moves confirmation and empty-selection messages into a separate non-modal plugin panel. Clicking Mass Enter no longer changes MeshCentral's global modal state or blocks its toolbar.

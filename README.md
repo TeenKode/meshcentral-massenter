@@ -1,6 +1,6 @@
 # MeshCentral Mass Enter
 
-Current version: **0.1.3**
+Current version: **0.2.0**
 
 MeshCentral plugin for one-time mass keyboard input on Windows sign-in screens.
 
@@ -45,9 +45,41 @@ MeshCentral reads `config.json`, compares the published plugin version with the 
 4. Change the delay or concurrency if necessary.
 5. Confirm.
 
-Confirmation opens in a separate non-modal panel with explicit Send and Cancel buttons. It does not change MeshCentral's shared dialog state, so the rest of the interface stays usable before, during, and after a batch. Progress appears in a floating panel and reports `OK`, `SKIP`, or `ERR` for every processed device.
+Confirmation opens in a separate non-modal panel with explicit Send and Cancel buttons. It does not change MeshCentral's shared dialog state, so the rest of the interface stays usable before, during, and after a batch. Progress appears in a floating panel and reports `OK`, `SKIP`, `CANCEL`, or `ERR` for every processed device.
 
 An `OK` result is only produced after a real Remote Desktop screen-size event has initialized the KVM channel and both Enter sequences have been written to that channel. If the relay opens but the desktop stream does not initialize, the device is reported as an error instead of a false success.
+
+## Cancel and retry
+
+The progress panel includes **Остановить выполнение**. It removes pending devices
+from the queue, closes active KVM relays, and clears scheduled key presses. Keys
+already sent cannot be undone. Closing the panel with × only hides progress.
+Cancelled devices have a separate `CANCEL` result and are not treated as errors.
+
+After completion, **Повторить ошибки** starts a new batch containing only the
+failed devices, using the previous delay and concurrency. Successful, skipped,
+and cancelled devices are not retried. All failures are retained for retry even
+when only the latest 60 results are displayed. Results are kept in the current
+browser tab; refresh clears the batch history.
+
+## Server preferences
+
+Delay and concurrency are stored in the MeshCentral database separately for each
+authenticated user (including the MeshCentral domain). They load whenever the
+confirmation panel opens and save automatically on start. **Сохранить на сервере**
+lets you save without sending keys. Preferences survive browser changes, server
+restarts, and plugin upgrades. Saving/loading failures are displayed explicitly.
+The batch itself runs in the browser and does not continue after the tab closes.
+
+## Windows session hints
+
+Confirmation lists each selected device with the agent's reported `users` and
+`lusers` information: no active users, a reported locked session, an existing
+user session, offline, or unavailable data. These are hints, not screen detection.
+No active user can suggest a sign-in screen; a reported user can belong to a
+locked or remote session. Older agents and Windows versions may omit lock data.
+The hints do not automatically filter devices or confirm successful Windows login.
+For a definitive check of the visible screen, open the native Desktop preview.
 
 ## Testing
 

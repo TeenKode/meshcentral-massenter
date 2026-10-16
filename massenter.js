@@ -3,7 +3,7 @@
  * Sends Enter, waits, then sends Enter again to selected devices through
  * the normal MeshCentral KVM channel.
  *
- * Version: 0.1.3
+ * Version: 0.2.0
  */
 "use strict";
 
@@ -26,12 +26,133 @@ module.exports.massenter = function (parent) {
         'sendEnter',
         'ensureProgressPanel',
         'hideProgressPanel',
-        'updateProgress'
+        'updateProgress',
+        'normalizeSettings',
+        'requestSettings',
+        'onSettings',
+        'readSettings',
+        'loadSettings',
+        'saveSettings',
+        'cancelBatch',
+        'retryErrors',
+        'getSessionHint'
     ];
 
+    obj.normalizeSettings = function (settings) {
+        settings = settings || {};
+        function number(value, fallback, min, max) {
+            if (typeof value !== 'number' && typeof value !== 'string') return fallback;
+            if (value === '') return fallback;
+            var n = Number(value);
+            return isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
+        }
+        return { delay: number(settings.delay, 1000, 300, 5000), concurrency: number(settings.concurrency, 6, 1, 20) };
+    };
+
+    // userid is supplied by MeshCentral's authenticated session, never by the client.
+    // Store outside the plugin directory so upgrades preserve preferences.
+    obj.serveraction = function (command, session) {
+        if (!session || !session.user || typeof session.user._id !== 'string') return;
+        if (!command || typeof command.requestId !== 'string' || command.requestId.length > 100) return;
+        if (command.operation !== 'getSettings' && command.operation !== 'saveSettings') return;
+        var userid = session.user._id;
+        var key = 'massenter-settings/' + userid;
+        function reply(error, settings) {
+            session.send({ action: 'plugin', plugin: 'massenter', method: 'onSettings',
+                requestId: command.requestId, error: error || null, settings: settings });
+        }
+        try {
+            if (command.operation === 'getSettings') {
+                obj.meshServer.db.Get(key, function (err, docs) {
+                    if (err) { reply('Не удалось загрузить настройки с сервера'); return; }
+                    reply(null, obj.normalizeSettings(docs && docs[0] ? docs[0].settings : null));
+                });
+            } else {
+                var settings = obj.normalizeSettings(command.settings);
+                obj.meshServer.db.Set({ _id: key, type: 'massenter-settings', userid: userid,
+                    domain: session.domain.id, settings: settings }, function (err) {
+                    reply(err ? 'Не удалось сохранить настройки на сервере' : null, settings);
+                });
+            }
+        } catch (e) { reply('Серверное хранилище настроек недоступно'); }
+    };
+
+    obj.requestSettings = function (operation, settings, callback) {
+        var me = pluginHandler.massenter;
+        if (!me.settingsRequests) me.settingsRequests = {};
+        var id = String((me.settingsRequestId || 0) + 1);
+        me.settingsRequestId = Number(id);
+        var timer = setTimeout(function () {
+            var pending = me.settingsRequests[id];
+            if (!pending) return;
+            delete me.settingsRequests[id];
+            pending.callback('Сервер не ответил на запрос настроек');
+        }, 8000);
+        me.settingsRequests[id] = { timer: timer, callback: callback };
+        try {
+            meshserver.send({ action: 'plugin', plugin: 'massenter', operation: operation, requestId: id, settings: settings });
+        } catch (e) { me.onSettings(null, { requestId: id, error: 'Нет связи с сервером настроек' }); }
+    };
+
+    obj.onSettings = function (server, message) {
+        var me = pluginHandler.massenter;
+        var pending = me.settingsRequests && me.settingsRequests[message.requestId];
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        delete me.settingsRequests[message.requestId];
+        pending.callback(message.error, me.normalizeSettings(message.settings));
+    };
+
+    obj.readSettings = function () {
+        var d = document.getElementById('massEnterDelay');
+        var c = document.getElementById('massEnterConcurrency');
+        return pluginHandler.massenter.normalizeSettings({ delay: d && d.value, concurrency: c && c.value });
+    };
+
+    obj.loadSettings = function () {
+        var panel = document.getElementById('massEnterConfirmation');
+        var d = document.getElementById('massEnterDelay');
+        var c = document.getElementById('massEnterConcurrency');
+        var start = document.getElementById('massEnterConfirmButton');
+        var save = document.getElementById('massEnterSaveSettings');
+        var status = document.getElementById('massEnterSettingsStatus');
+        d.disabled = c.disabled = start.disabled = save.disabled = true;
+        status.textContent = 'Загрузка настроек с сервера…';
+        pluginHandler.massenter.requestSettings('getSettings', null, function (error, settings) {
+            if (document.getElementById('massEnterConfirmation') !== panel) return;
+            d.disabled = c.disabled = start.disabled = save.disabled = false;
+            if (!error) { d.value = settings.delay; c.value = settings.concurrency; }
+            status.textContent = error ? error + '. Доступны стандартные значения.' : 'Настройки вашего пользователя загружены с сервера.';
+        });
+    };
+
+    obj.saveSettings = function () {
+        var panel = document.getElementById('massEnterConfirmation');
+        var save = document.getElementById('massEnterSaveSettings');
+        var status = document.getElementById('massEnterSettingsStatus');
+        save.disabled = true;
+        status.textContent = 'Сохранение…';
+        pluginHandler.massenter.requestSettings('saveSettings', pluginHandler.massenter.readSettings(), function (error) {
+            if (document.getElementById('massEnterConfirmation') !== panel) return;
+            save.disabled = false;
+            status.textContent = error || 'Настройки сохранены на сервере для вашего пользователя.';
+        });
+    };
+
+    obj.getSessionHint = function (node) {
+        if (!node || ((node.conn || 0) & 1) === 0) return 'офлайн — состояние неизвестно';
+        if (typeof isWindowsNode !== 'function' || !isWindowsNode(node)) return 'сведения о сеансе Windows недоступны';
+        if (!Array.isArray(node.users)) return 'агент не сообщил состояние сеанса';
+        if (node.users.length === 0) return 'нет активных пользователей — возможен экран входа';
+        if (Array.isArray(node.lusers) && node.users.every(function (u) { return node.lusers.indexOf(u) >= 0; })) {
+            return 'агент сообщает о блокировке: ' + node.users.join(', ');
+        }
+        return 'есть пользовательский сеанс: ' + node.users.join(', ') + ' — экран входа не подтверждён';
+    };
+
     obj.server_startup = function () {
-        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.1.3 loaded'); }
-        catch (e) { console.log('MeshCentral Mass Enter plugin 0.1.3 loaded'); }
+        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.2.0 loaded'); }
+        catch (e) { console.log('MeshCentral Mass Enter plugin 0.2.0 loaded'); }
     };
 
     obj.onWebUIStartupEnd = function () {
@@ -138,11 +259,26 @@ module.exports.massenter = function (parent) {
         html += '<br><br>';
         html += '<label>Пауза между Enter: <input id="massEnterDelay" type="number" min="300" max="5000" step="100" value="1000" style="width:85px"> мс</label><br>';
         html += '<label>Одновременных KVM-подключений: <input id="massEnterConcurrency" type="number" min="1" max="20" value="6" style="width:60px"></label>';
+        html += '<br><button id="massEnterSaveSettings" type="button" onclick="pluginHandler.massenter.saveSettings()">Сохранить на сервере</button>' +
+            '<div id="massEnterSettingsStatus" style="margin-top:6px" aria-live="polite"></div>';
         html += '<br><br><span style="color:#a04000"><b>Важно:</b> запускайте только для компьютеров, находящихся на экране входа Windows.</span>';
         html += '</div>';
 
         pluginHandler.massenter.showConfirmation(html, true);
         pluginHandler.massenter.pendingNodeIds = ids.slice();
+        var list = document.createElement('div');
+        list.style.cssText = 'margin:10px 0;max-height:150px;overflow:auto;font-size:12px';
+        var info = document.createElement('div');
+        info.textContent = 'Сведения агента о сеансах (не распознавание экрана входа):';
+        list.appendChild(info);
+        ids.forEach(function (id) {
+            var node = pluginHandler.massenter.getNode(id);
+            var line = document.createElement('div');
+            line.textContent = (node && node.name ? node.name : id) + ' — ' + pluginHandler.massenter.getSessionHint(node);
+            list.appendChild(line);
+        });
+        document.getElementById('massEnterConfirmation').appendChild(list);
+        pluginHandler.massenter.loadSettings();
     };
 
     // Keep plugin confirmation independent of MeshCentral's global modal state.
@@ -181,23 +317,17 @@ module.exports.massenter = function (parent) {
 
     obj.runSelected = function () {
         var ids = pluginHandler.massenter.pendingNodeIds || pluginHandler.massenter.getSelectedNodeIds();
-        var delay = 1000, concurrency = 6;
-
-        try {
-            var d = document.getElementById('massEnterDelay');
-            var c = document.getElementById('massEnterConcurrency');
-            if (d) delay = parseInt(d.value, 10);
-            if (c) concurrency = parseInt(c.value, 10);
-        } catch (e) { }
-
-        if (!isFinite(delay)) delay = 1000;
-        if (!isFinite(concurrency)) concurrency = 6;
-        delay = Math.max(300, Math.min(5000, delay));
-        concurrency = Math.max(1, Math.min(20, concurrency));
-
+        var settings = pluginHandler.massenter.readSettings();
         pluginHandler.massenter.closeConfirmation();
         pluginHandler.massenter.ensureProgressPanel();
-        pluginHandler.massenter.startBatch(ids, delay, concurrency);
+        pluginHandler.massenter.startBatch(ids, settings.delay, settings.concurrency);
+        var batch = pluginHandler.massenter.batch;
+        batch.settingsStatus = 'Сохранение настроек на сервере…';
+        pluginHandler.massenter.updateProgress();
+        pluginHandler.massenter.requestSettings('saveSettings', settings, function (error) {
+            batch.settingsStatus = error || 'Настройки сохранены на сервере.';
+            if (pluginHandler.massenter.batch === batch) pluginHandler.massenter.updateProgress();
+        });
     };
 
     obj.ensureProgressPanel = function () {
@@ -228,7 +358,9 @@ module.exports.massenter = function (parent) {
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
             '<b>Mass Enter</b>' +
             '<button type="button" onclick="pluginHandler.massenter.hideProgressPanel()" style="cursor:pointer">×</button>' +
-            '</div><div id="massEnterProgress">Подготовка...</div>';
+            '</div><div id="massEnterProgress" aria-live="polite">Подготовка...</div>' +
+            '<div style="margin-top:10px"><button id="massEnterStopButton" type="button" onclick="pluginHandler.massenter.cancelBatch()">Остановить выполнение</button> ' +
+            '<button id="massEnterRetryButton" type="button" onclick="pluginHandler.massenter.retryErrors()">Повторить ошибки</button></div>';
         document.body.appendChild(panel);
         return panel;
     };
@@ -238,73 +370,82 @@ module.exports.massenter = function (parent) {
         if (panel) panel.style.display = 'none';
     };
 
+    obj.cancelBatch = function () {
+        var me = pluginHandler.massenter, batch = me.batch;
+        if (!batch || !batch.running || batch.cancelled) return;
+        batch.cancelled = true;
+        while (batch.queue.length) batch.record(batch.queue.shift(), 'cancel', 'не запущено — отменено');
+        Object.keys(batch.cancellers).forEach(function (id) { batch.cancellers[id](); });
+        batch.pump();
+    };
+
+    obj.retryErrors = function () {
+        var batch = pluginHandler.massenter.batch;
+        if (!batch || batch.running || batch.failedNodeIds.length === 0) return;
+        pluginHandler.massenter.ensureProgressPanel();
+        pluginHandler.massenter.startBatch(batch.failedNodeIds.slice(), batch.delay, batch.concurrency);
+    };
+
     obj.startBatch = function (ids, delay, concurrency) {
-        ids = Array.isArray(ids) ? ids.slice() : [];
-        if (pluginHandler.massenter.batch && pluginHandler.massenter.batch.running) return;
-
+        var me = pluginHandler.massenter;
+        if (me.batch && me.batch.running) return;
+        ids = Array.isArray(ids) ? ids.filter(function (id, i, all) { return typeof id === 'string' && all.indexOf(id) === i; }) : [];
+        var settings = me.normalizeSettings({ delay: delay, concurrency: concurrency });
         var batch = {
-            total: ids.length,
-            done: 0,
-            ok: 0,
-            skipped: 0,
-            failed: 0,
-            active: 0,
-            running: true,
-            delay: delay,
-            concurrency: concurrency,
-            queue: ids,
-            results: []
+            total: ids.length, done: 0, ok: 0, skipped: 0, failed: 0, cancelledCount: 0,
+            active: 0, running: true, cancelled: false,
+            delay: settings.delay, concurrency: settings.concurrency,
+            queue: ids, results: [], failedNodeIds: [], cancellers: Object.create(null)
         };
-        pluginHandler.massenter.batch = batch;
-
+        me.batch = batch;
         var button = document.getElementById('MassEnterButton');
         if (button) button.disabled = true;
-        pluginHandler.massenter.updateProgress();
 
-        function record(nodeid, status, message) {
-            var node = pluginHandler.massenter.getNode(nodeid);
-            var name = (node && node.name) ? node.name : nodeid;
-            batch.results.push({ nodeid: nodeid, name: name, status: status, message: message || '' });
-            if (batch.results.length > 60) batch.results.shift();
+        batch.record = function (nodeid, status, message) {
+            var node = me.getNode(nodeid);
+            batch.results.push({ nodeid: nodeid, name: node && node.name ? node.name : nodeid, status: status, message: message || '' });
             batch.done++;
             if (status === 'ok') batch.ok++;
             else if (status === 'skip') batch.skipped++;
-            else batch.failed++;
-            pluginHandler.massenter.updateProgress();
-        }
+            else if (status === 'cancel') batch.cancelledCount++;
+            else { batch.failed++; batch.failedNodeIds.push(nodeid); }
+            me.updateProgress();
+        };
 
-        function finishBatch() {
-            if (!batch.running) return;
-            batch.running = false;
-            if (button) button.disabled = false;
-            pluginHandler.massenter.updateProgress();
-        }
-
-        function pump() {
-            while (batch.active < batch.concurrency && batch.queue.length > 0) {
+        var pumping = false;
+        batch.pump = function () {
+            if (pumping || !batch.running) return;
+            pumping = true;
+            while (!batch.cancelled && batch.active < batch.concurrency && batch.queue.length > 0) {
                 var nodeid = batch.queue.shift();
-                var eligibility = pluginHandler.massenter.getEligibility(nodeid);
-
-                if (!eligibility.ok) {
-                    record(nodeid, 'skip', eligibility.reason);
-                    continue;
-                }
-
+                var eligibility = me.getEligibility(nodeid);
+                if (!eligibility.ok) { batch.record(nodeid, 'skip', eligibility.reason); continue; }
                 batch.active++;
                 (function (id) {
-                    pluginHandler.massenter.runOne(id, batch.delay, function (err) {
+                    var completed = false;
+                    function complete(err) {
+                        if (completed) return;
+                        completed = true;
+                        delete batch.cancellers[id];
                         batch.active--;
-                        if (err) record(id, 'fail', err.message || String(err));
-                        else record(id, 'ok', 'Enter → Enter отправлены');
-                        pump();
-                    });
+                        var status = err ? (err.code === 'CANCELLED' ? 'cancel' : 'fail') : 'ok';
+                        batch.record(id, status, err ? err.message || String(err) : 'Enter → Enter отправлены (вход не подтверждён)');
+                        batch.pump();
+                    }
+                    try {
+                        var cancel = me.runOne(id, batch.delay, complete);
+                        if (!completed) batch.cancellers[id] = cancel;
+                    } catch (e) { complete(e); }
                 })(nodeid);
             }
-
-            if (batch.active === 0 && batch.queue.length === 0) finishBatch();
-        }
-
-        pump();
+            pumping = false;
+            if (batch.active === 0 && batch.queue.length === 0) {
+                batch.running = false;
+                if (button) button.disabled = false;
+            }
+            me.updateProgress();
+        };
+        batch.pump();
     };
 
     obj.sendEnter = function (redir) {
@@ -322,10 +463,12 @@ module.exports.massenter = function (parent) {
         var canvas = null;
         var timeout = null;
         var screenTimeout = null;
+        var keyTimers = [];
 
         function cleanup() {
             if (timeout) clearTimeout(timeout);
             if (screenTimeout) clearTimeout(screenTimeout);
+            keyTimers.forEach(function (timer) { clearTimeout(timer); });
             try { if (redir) redir.Stop(); } catch (e) { }
             try { if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas); } catch (e2) { }
         }
@@ -337,22 +480,21 @@ module.exports.massenter = function (parent) {
             callback(err || null);
         }
 
+        function schedule(fn, ms) {
+            keyTimers.push(setTimeout(function () {
+                if (done) return;
+                try { fn(); } catch (e) { finish(e); }
+            }, ms));
+        }
+
         function beginKeys() {
             if (done || started || !screenReady || !redir || redir.State !== 3 || !redir.m || redir.m.State !== 3) return;
             started = true;
-
-            setTimeout(function () {
-                if (done || !pluginHandler.massenter.sendEnter(redir)) {
-                    finish(new Error('не удалось отправить первый Enter'));
-                    return;
-                }
-
-                setTimeout(function () {
-                    if (done || !pluginHandler.massenter.sendEnter(redir)) {
-                        finish(new Error('не удалось отправить второй Enter'));
-                        return;
-                    }
-                    setTimeout(function () { finish(null); }, 500);
+            schedule(function () {
+                if (!pluginHandler.massenter.sendEnter(redir)) { finish(new Error('не удалось отправить первый Enter')); return; }
+                schedule(function () {
+                    if (!pluginHandler.massenter.sendEnter(redir)) { finish(new Error('не удалось отправить второй Enter')); return; }
+                    schedule(function () { finish(null); }, 500);
                 }, delay);
             }, 300);
         }
@@ -406,7 +548,7 @@ module.exports.massenter = function (parent) {
 
             redir.onStateChanged = function (r, state) {
                 if (done) return;
-                if (state === 3) {
+                if (state === 3 && !screenReady && !screenTimeout) {
                     // State 3 only proves the relay is connected. Do not send keyboard
                     // input until the desktop module receives a real screen-size event.
                     screenTimeout = setTimeout(function () {
@@ -425,6 +567,11 @@ module.exports.massenter = function (parent) {
         } catch (e) {
             finish(e);
         }
+        return function () {
+            var error = new Error('выполнение отменено; уже отправленные клавиши не отменяются');
+            error.code = 'CANCELLED';
+            finish(error);
+        };
     };
 
     obj.updateProgress = function () {
@@ -440,13 +587,19 @@ module.exports.massenter = function (parent) {
         if (b.running) {
             header = 'Обработано ' + b.done + ' из ' + b.total + ' — успешно: ' + b.ok + ', пропущено: ' + b.skipped + ', ошибок: ' + b.failed + ', активно: ' + b.active;
         } else {
-            header = 'Готово. Обработано ' + b.done + ' из ' + b.total + ' — успешно: ' + b.ok + ', пропущено: ' + b.skipped + ', ошибок: ' + b.failed;
+            header = (b.cancelled ? 'Остановлено. Обработано ' : 'Готово. Обработано ') + b.done + ' из ' + b.total + ' — успешно: ' + b.ok + ', пропущено: ' + b.skipped + ', ошибок: ' + b.failed;
         }
 
+        header += ', отменено: ' + b.cancelledCount;
         var lines = [header];
-        for (var i = 0; i < b.results.length; i++) {
+        if (b.settingsStatus) lines.push(b.settingsStatus);
+        var stop = document.getElementById('massEnterStopButton');
+        var retry = document.getElementById('massEnterRetryButton');
+        if (stop) stop.disabled = !b.running || b.cancelled;
+        if (retry) { retry.disabled = b.running || b.failedNodeIds.length === 0; retry.textContent = 'Повторить ошибки (' + b.failedNodeIds.length + ')'; }
+        for (var i = Math.max(0, b.results.length - 60); i < b.results.length; i++) {
             var r = b.results[i];
-            var prefix = r.status === 'ok' ? '[OK]' : (r.status === 'skip' ? '[SKIP]' : '[ERR]');
+            var prefix = r.status === 'ok' ? '[OK]' : (r.status === 'skip' ? '[SKIP]' : (r.status === 'cancel' ? '[CANCEL]' : '[ERR]'));
             lines.push(prefix + ' ' + r.name + (r.message ? ' — ' + r.message : ''));
         }
         el.textContent = lines.join('\n');
