@@ -160,6 +160,9 @@ function probe(callback) {
                 finish(facts);
             } catch (ignore) { finish({ error: 'invalid-response' }); }
         });
+        // Match MeshAgent's win-deskutils: some Windows builds only pump these
+        // cross-session process pipes during waitExit. The wait is bounded.
+        child.waitExit(6000);
     } catch (ignore) { finish({ error: 'native-unavailable' }); }
 }
 

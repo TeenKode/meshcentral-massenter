@@ -168,7 +168,7 @@ function agentHarness() {
     const handlers = {}, output = [], timers = new Map();
     let next = 0, killed = 0;
     const child = { stdout: { on(event, fn) { handlers.stdout = fn; } }, stderr: { on() {} },
-        on(event, fn) { handlers[event] = fn; }, kill() { killed++; } };
+        on(event, fn) { handlers[event] = fn; }, waitExit(ms) { assert.equal(ms, 6000); }, kill() { killed++; } };
     const source = fs.readFileSync(require.resolve('../modules_meshcore/massenter.js'), 'utf8');
     const context = vm.createContext({ module: { exports: {} }, Buffer, console,
         process: { platform: 'win32', execPath: 'C:\\MeshAgent.exe' }, getJSModule() { return source; },
