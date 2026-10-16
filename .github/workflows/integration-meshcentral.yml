@@ -104,7 +104,7 @@ jobs:
           Xvfb :99 -screen 0 1024x768x24 -ac > .ci-xvfb.log 2>&1 &
           echo $! > .ci-xvfb.pid
           sleep 2
-          DISPLAY=:99 xev -event keyboard > .ci-xev.log 2>&1 &
+          DISPLAY=:99 stdbuf -oL -eL xev -event keyboard > .ci-xev.log 2>&1 &
           echo $! > .ci-xev.pid
           sleep 2
           WIN="$(DISPLAY=:99 xdotool search --name 'Event Tester' | head -n1)"
@@ -137,20 +137,12 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install chromium
 
-      - name: Exercise Mass Enter in real MeshCentral UI
+      - name: Compare Mass Enter with native MeshCentral KVM
         run: node .github/ci/meshcentral-ui-test.mjs
 
-      - name: Verify two Return key presses reached X11
-        shell: bash
-        run: |
-          cat .ci-xev.log
-          python3 - <<'PY'
-          import re
-          s=open('.ci-xev.log', errors='ignore').read()
-          presses=len(re.findall(r'KeyPress event.*?keysym 0xff0d, Return', s, flags=re.S))
-          print('Return KeyPress count:', presses)
-          assert presses >= 2
-          PY
+      - name: Show captured X11 keyboard events
+        if: always()
+        run: cat .ci-xev.log 2>/dev/null || true
 
       - name: Dump diagnostics on failure
         if: failure()
