@@ -107,8 +107,10 @@ jobs:
           import json
           groups=json.load(open('.ci-groups.json', encoding='utf-8'))
           g=next(x for x in groups if x.get('name') == 'Mass Enter CI')
-          meshid=g['_id']
-          assert meshid.startswith('mesh//'), meshid
+          fullid=g['_id']
+          assert fullid.startswith('mesh//'), fullid
+          meshid=fullid[len('mesh//'):]
+          assert len(meshid)==64, meshid
           open('.ci-meshid','w').write(meshid)
           PY
 
