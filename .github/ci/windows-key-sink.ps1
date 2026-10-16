@@ -13,42 +13,50 @@ Add-Type -AssemblyName System.Drawing
 $fullLogPath = [System.IO.Path]::GetFullPath($LogPath)
 [System.IO.File]::WriteAllText($fullLogPath, "")
 
-# MeshCentral starts in LAN mode in the CI harness. In that mode the generated
-# agent settings use MeshServer=local, which relies on LAN discovery and does
-# not work on a GitHub-hosted Windows runner. Keep the generated MeshID,
-# certificate hash and all other settings intact; only point the CI agent at
-# the already-running local MeshCentral server.
+# The official MeshCentral installer uses -fullinstall --copy-msh=1. The CI
+# workflow currently calls -fullinstall only, so reproduce the missing copy
+# before testing KVM. The source .msh was downloaded from this same test server.
 try {
+    $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $sourceMsh = Join-Path $repoRoot '.ci-agent\meshagent.msh'
     $agentDir = Join-Path $env:ProgramFiles 'Mesh Agent'
-    $msh = Get-ChildItem -Path $agentDir -Filter '*.msh' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($msh) {
-        $raw = [System.IO.File]::ReadAllText($msh.FullName)
+    $targetMsh = Join-Path $agentDir 'MeshAgent.msh'
+
+    if ((Test-Path $sourceMsh) -and (Test-Path $agentDir)) {
+        Copy-Item -Path $sourceMsh -Destination $targetMsh -Force
+        [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_COPIED`r`n")
+
+        $raw = [System.IO.File]::ReadAllText($targetMsh)
         if ($raw -match '(?m)^MeshServer=local\r?$') {
             $patched = [regex]::Replace(
                 $raw,
                 '(?m)^MeshServer=local\r?$',
                 'MeshServer=wss://localhost:4443/agent.ashx'
             )
-            [System.IO.File]::WriteAllText($msh.FullName, $patched, [System.Text.Encoding]::ASCII)
-
-            $svc = Get-Service | Where-Object {
-                $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*'
-            } | Select-Object -First 1
-            if ($svc) {
-                Restart-Service -Name $svc.Name -Force
-                $svc.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(20))
-                [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_PATCHED`r`n")
-            } else {
-                [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_PATCHED_NO_SERVICE`r`n")
-            }
+            [System.IO.File]::WriteAllText($targetMsh, $patched, [System.Text.Encoding]::ASCII)
+            [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_PATCHED`r`n")
         } else {
-            [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_NO_PATCH_NEEDED`r`n")
+            [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_NO_SERVER_PATCH_NEEDED`r`n")
+        }
+
+        $svc = Get-Service | Where-Object {
+            $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*'
+        } | Select-Object -First 1
+        if ($svc) {
+            Restart-Service -Name $svc.Name -Force
+            $svc.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(20))
+            [System.IO.File]::AppendAllText($fullLogPath, "AGENT_SERVICE_RESTARTED`r`n")
+        } else {
+            [System.IO.File]::AppendAllText($fullLogPath, "AGENT_SERVICE_NOT_FOUND`r`n")
         }
     } else {
-        [System.IO.File]::AppendAllText($fullLogPath, "AGENT_MSH_NOT_FOUND`r`n")
+        [System.IO.File]::AppendAllText(
+            $fullLogPath,
+            ("AGENT_MSH_COPY_SOURCE_OR_TARGET_MISSING source={0} targetDir={1}`r`n" -f (Test-Path $sourceMsh), (Test-Path $agentDir))
+        )
     }
 } catch {
-    [System.IO.File]::AppendAllText($fullLogPath, ("AGENT_MSH_PATCH_ERROR:{0}`r`n" -f $_.Exception.Message))
+    [System.IO.File]::AppendAllText($fullLogPath, ("AGENT_MSH_SETUP_ERROR:{0}`r`n" -f $_.Exception.Message))
 }
 
 $fullReadyPath = $null
