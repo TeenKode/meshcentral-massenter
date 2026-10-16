@@ -3,7 +3,7 @@
  * Sends Enter, waits, then sends Enter again to selected devices through
  * the normal MeshCentral KVM channel.
  *
- * Version: 0.1.1
+ * Version: 0.1.2
  */
 "use strict";
 
@@ -12,7 +12,6 @@ module.exports.massenter = function (parent) {
     obj.parent = parent;
     obj.meshServer = parent.parent;
 
-    // Exported functions are serialized into MeshCentral's browser plugin handler.
     obj.exports = [
         'onWebUIStartupEnd',
         'getSelectedNodeIds',
@@ -29,8 +28,8 @@ module.exports.massenter = function (parent) {
     ];
 
     obj.server_startup = function () {
-        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.1.1 loaded'); }
-        catch (e) { console.log('MeshCentral Mass Enter plugin 0.1.1 loaded'); }
+        try { obj.meshServer.debug('plugin:massenter', 'Mass Enter plugin 0.1.2 loaded'); }
+        catch (e) { console.log('MeshCentral Mass Enter plugin 0.1.2 loaded'); }
     };
 
     obj.onWebUIStartupEnd = function () {
@@ -112,9 +111,7 @@ module.exports.massenter = function (parent) {
         } catch (e) { }
 
         if (!node.agent) return { ok: false, reason: 'нет данных MeshAgent' };
-        if (node.agent.caps != null && ((node.agent.caps & 1) === 0)) {
-            return { ok: false, reason: 'агент без KVM' };
-        }
+        if (node.agent.caps != null && ((node.agent.caps & 1) === 0)) return { ok: false, reason: 'агент без KVM' };
         return { ok: true, node: node };
     };
 
@@ -171,10 +168,9 @@ module.exports.massenter = function (parent) {
         delay = Math.max(300, Math.min(5000, delay));
         concurrency = Math.max(1, Math.min(20, concurrency));
 
-        // IMPORTANT: close MeshCentral's modal before starting. Leaving it open
-        // blocks all other controls in the web UI.
-        try { if (typeof setDialogMode === 'function') setDialogMode(0); } catch (e2) { }
-
+        // MeshCentral's dialogclose() closes the modal before invoking this callback.
+        // Do not call setDialogMode() again here: double-closing can corrupt dialog state
+        // on some MeshCentral versions/UI variants.
         pluginHandler.massenter.ensureProgressPanel();
         pluginHandler.massenter.startBatch(ids, delay, concurrency);
     };
@@ -202,6 +198,7 @@ module.exports.massenter = function (parent) {
         panel.style.borderRadius = '6px';
         panel.style.boxShadow = '0 4px 18px rgba(0,0,0,.28)';
         panel.style.padding = '10px';
+        panel.style.pointerEvents = 'auto';
         panel.innerHTML =
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
             '<b>Mass Enter</b>' +
@@ -218,8 +215,6 @@ module.exports.massenter = function (parent) {
 
     obj.startBatch = function (ids, delay, concurrency) {
         ids = Array.isArray(ids) ? ids.slice() : [];
-
-        // Prevent two overlapping batches from the same browser tab.
         if (pluginHandler.massenter.batch && pluginHandler.massenter.batch.running) return;
 
         var batch = {
@@ -288,7 +283,7 @@ module.exports.massenter = function (parent) {
     };
 
     obj.sendEnter = function (redir) {
-        if (!redir || redir.State !== 3 || !redir.m || typeof redir.m.SendKeyMsgKC !== 'function') return false;
+        if (!redir || redir.State !== 3 || !redir.m || redir.m.State !== 3 || typeof redir.m.SendKeyMsgKC !== 'function') return false;
         redir.m.SendKeyMsgKC(redir.m.KeyAction.DOWN, 13, false);
         redir.m.SendKeyMsgKC(redir.m.KeyAction.UP, 13, false);
         return true;
@@ -297,14 +292,15 @@ module.exports.massenter = function (parent) {
     obj.runOne = function (nodeid, delay, callback) {
         var done = false;
         var started = false;
+        var screenReady = false;
         var redir = null;
         var canvas = null;
         var timeout = null;
-        var fallbackStart = null;
+        var screenTimeout = null;
 
         function cleanup() {
             if (timeout) clearTimeout(timeout);
-            if (fallbackStart) clearTimeout(fallbackStart);
+            if (screenTimeout) clearTimeout(screenTimeout);
             try { if (redir) redir.Stop(); } catch (e) { }
             try { if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas); } catch (e2) { }
         }
@@ -317,7 +313,7 @@ module.exports.massenter = function (parent) {
         }
 
         function beginKeys() {
-            if (done || started || !redir || redir.State !== 3) return;
+            if (done || started || !screenReady || !redir || redir.State !== 3 || !redir.m || redir.m.State !== 3) return;
             started = true;
 
             setTimeout(function () {
@@ -331,15 +327,17 @@ module.exports.massenter = function (parent) {
                         finish(new Error('не удалось отправить второй Enter'));
                         return;
                     }
-                    setTimeout(function () { finish(null); }, 350);
+                    setTimeout(function () { finish(null); }, 500);
                 }, delay);
-            }, 250);
+            }, 300);
         }
 
         try {
             if (typeof CreateAgentRedirect !== 'function') throw new Error('CreateAgentRedirect недоступен');
             if (typeof CreateAgentRemoteDesktop !== 'function') throw new Error('CreateAgentRemoteDesktop недоступен');
             if (typeof meshserver === 'undefined' || meshserver == null) throw new Error('нет активной MeshCentral web-сессии');
+
+            var node = pluginHandler.massenter.getNode(nodeid);
 
             canvas = document.createElement('canvas');
             canvas.width = 16;
@@ -354,10 +352,16 @@ module.exports.massenter = function (parent) {
 
             var desktopModule = CreateAgentRemoteDesktop(canvas);
             desktopModule.stopInput = false;
+            try {
+                if (typeof isWindowsNode === 'function' && node) desktopModule.UseExtendedKeyFlag = isWindowsNode(node);
+            } catch (e0) { }
 
-            // Start sending only after the KVM stream has actually initialized.
-            desktopModule.onScreenSizeChange = function () {
-                if (redir && redir.State === 3) beginKeys();
+            desktopModule.onScreenSizeChange = function (m, width, height) {
+                if (done || !redir || redir.State !== 3 || m.State !== 3) return;
+                if (!(width > 0 && height > 0)) return;
+                screenReady = true;
+                if (screenTimeout) { clearTimeout(screenTimeout); screenTimeout = null; }
+                beginKeys();
             };
 
             var publicNamePort = (typeof serverPublicNamePort !== 'undefined') ? serverPublicNamePort : null;
@@ -378,81 +382,52 @@ module.exports.massenter = function (parent) {
             redir.onStateChanged = function (r, state) {
                 if (done) return;
                 if (state === 3) {
-                    // Screen-size initialization normally fires first; this is a
-                    // fallback for agents that do not emit it quickly.
-                    fallbackStart = setTimeout(beginKeys, 1400);
-                } else if (state === 0 && started) {
-                    finish(new Error('KVM-соединение разорвано'));
+                    // State 3 only proves the relay is connected. Do not send keyboard
+                    // input until the desktop module receives a real screen-size event.
+                    screenTimeout = setTimeout(function () {
+                        if (!screenReady) finish(new Error('KVM подключён, но экран не инициализирован'));
+                    }, 12000);
+                } else if (state === 0 && !done) {
+                    finish(new Error(screenReady ? 'KVM-соединение разорвано' : 'KVM-соединение закрыто до инициализации экрана'));
                 }
             };
 
-            redir.onConsoleMessageChange = function (r, msg) {
-                if (!done && msg && typeof msg === 'string') redir._massEnterLastMessage = msg;
-            };
-
             timeout = setTimeout(function () {
-                var suffix = (redir && redir._massEnterLastMessage) ? (': ' + redir._massEnterLastMessage) : '';
-                finish(new Error('тайм-аут KVM' + suffix));
-            }, Math.max(10000, delay + 6500));
+                finish(new Error('тайм-аут KVM'));
+            }, Math.max(16000, delay + 14500));
 
             redir.Start(nodeid);
         } catch (e) {
-            finish(e instanceof Error ? e : new Error(String(e)));
+            finish(e);
         }
     };
 
     obj.updateProgress = function () {
-        var batch = pluginHandler.massenter.batch;
-        if (!batch) return;
-
-        pluginHandler.massenter.ensureProgressPanel();
-        var root = document.getElementById('massEnterProgress');
-        if (!root) return;
-        while (root.firstChild) root.removeChild(root.firstChild);
-
-        var complete = (!batch.running && batch.done === batch.total && batch.active === 0 && batch.queue.length === 0);
-
-        var summary = document.createElement('div');
-        summary.style.marginBottom = '8px';
-        summary.textContent =
-            (complete ? 'Готово. ' : 'Выполняется. ') +
-            'Обработано ' + batch.done + ' из ' + batch.total +
-            ' — успешно: ' + batch.ok +
-            ', пропущено: ' + batch.skipped +
-            ', ошибок: ' + batch.failed +
-            (batch.active ? ', активно: ' + batch.active : '');
-        root.appendChild(summary);
-
-        var barOuter = document.createElement('div');
-        barOuter.style.height = '8px';
-        barOuter.style.background = '#ddd';
-        barOuter.style.borderRadius = '4px';
-        barOuter.style.overflow = 'hidden';
-        barOuter.style.marginBottom = '10px';
-
-        var barInner = document.createElement('div');
-        barInner.style.height = '100%';
-        barInner.style.width = (batch.total ? Math.round((batch.done / batch.total) * 100) : 100) + '%';
-        barInner.style.background = '#4a90e2';
-        barOuter.appendChild(barInner);
-        root.appendChild(barOuter);
-
-        if (batch.results.length > 0) {
-            var list = document.createElement('div');
-            list.style.maxHeight = '230px';
-            list.style.overflow = 'auto';
-            list.style.fontFamily = 'monospace';
-            list.style.fontSize = '12px';
-
-            for (var i = batch.results.length - 1; i >= 0; i--) {
-                var item = batch.results[i];
-                var line = document.createElement('div');
-                var mark = item.status === 'ok' ? 'OK' : (item.status === 'skip' ? 'SKIP' : 'ERR');
-                line.textContent = '[' + mark + '] ' + item.name + (item.message ? ' — ' + item.message : '');
-                list.appendChild(line);
-            }
-            root.appendChild(list);
+        var el = document.getElementById('massEnterProgress');
+        if (!el) return;
+        var b = pluginHandler.massenter.batch;
+        if (!b) {
+            el.textContent = 'Подготовка...';
+            return;
         }
+
+        var header;
+        if (b.running) {
+            header = 'Обработано ' + b.done + ' из ' + b.total + ' — успешно: ' + b.ok + ', пропущено: ' + b.skipped + ', ошибок: ' + b.failed + ', активно: ' + b.active;
+        } else {
+            header = 'Готово. Обработано ' + b.done + ' из ' + b.total + ' — успешно: ' + b.ok + ', пропущено: ' + b.skipped + ', ошибок: ' + b.failed;
+        }
+
+        var lines = [header];
+        for (var i = 0; i < b.results.length; i++) {
+            var r = b.results[i];
+            var prefix = r.status === 'ok' ? '[OK]' : (r.status === 'skip' ? '[SKIP]' : '[ERR]');
+            lines.push(prefix + ' ' + r.name + (r.message ? ' — ' + r.message : ''));
+        }
+        el.textContent = lines.join('\n');
+        el.style.whiteSpace = 'pre-wrap';
+        el.style.fontFamily = 'monospace';
+        el.style.fontSize = '12px';
     };
 
     return obj;
