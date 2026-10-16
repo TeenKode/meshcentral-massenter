@@ -39,10 +39,22 @@ $text.Add_KeyDown({
     }
 })
 
+$focusTimer = New-Object System.Windows.Forms.Timer
+$focusTimer.Interval = 1000
+$focusTimer.Add_Tick({
+    if ($form.Visible) {
+        $form.Activate()
+        $form.BringToFront()
+        $text.Focus()
+    }
+})
+
 $form.Add_Shown({
     $form.Activate()
     $form.BringToFront()
     $text.Focus()
+    $focusTimer.Start()
 })
 
+$form.Add_FormClosed({ $focusTimer.Stop() })
 [System.Windows.Forms.Application]::Run($form)
