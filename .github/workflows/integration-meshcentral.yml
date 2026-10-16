@@ -2,6 +2,9 @@ name: MeshCentral integration
 
 on:
   push:
+    paths:
+      - 'massenter.js'
+      - 'config.json'
   workflow_dispatch:
 
 concurrency:
