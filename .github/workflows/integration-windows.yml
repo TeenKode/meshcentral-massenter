@@ -2,6 +2,10 @@ name: MeshCentral Windows integration
 
 on:
   push:
+    paths:
+      - 'massenter.js'
+      - 'config.json'
+      - '.github/workflows/integration-windows.yml'
   workflow_dispatch:
 
 concurrency:
@@ -38,6 +42,12 @@ jobs:
           npm ci --omit=dev
           Pop-Location
 
+      - name: Install Playwright
+        shell: pwsh
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+
       - name: Prepare MeshCentral data directory
         shell: pwsh
         run: |
@@ -64,147 +74,112 @@ jobs:
           node .ci-meshcentral-src\meshcentral.js --datapath "$PWD\.ci-data" --createaccount admin --pass 'MassEnter-Test-123!'
           if ($LASTEXITCODE -ne 0) { throw "MeshCentral account creation failed" }
 
-      - name: Start real MeshCentral
-        shell: pwsh
-        run: |
-          $server = Start-Process -FilePath node -ArgumentList @(
-            "$PWD\.ci-meshcentral-src\meshcentral.js",
-            '--datapath', "$PWD\.ci-data",
-            '--user', 'admin'
-          ) -RedirectStandardOutput "$PWD\.ci-meshcentral.log" -RedirectStandardError "$PWD\.ci-meshcentral.err.log" -PassThru
-          $server.Id | Set-Content .ci-server.pid
-
-          $ready = $false
-          for ($i = 0; $i -lt 90; $i++) {
-            Start-Sleep -Seconds 1
-            try {
-              $r = Invoke-WebRequest -Uri 'https://localhost:4443/' -SkipCertificateCheck -TimeoutSec 3
-              if ($r.StatusCode -eq 200) { $ready = $true; break }
-            } catch {}
-            if ($server.HasExited) { break }
-          }
-          Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
-          Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
-          if (-not $ready) { throw 'MeshCentral did not start on port 4443' }
-          Start-Sleep -Seconds 2
-
-      - name: Create device group
-        shell: pwsh
-        run: |
-          $url = 'wss://localhost:4443'
-          $created = $false
-          for ($i = 0; $i -lt 10; $i++) {
-            $output = node .ci-meshcentral-src\meshctrl.js AddDeviceGroup --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter Windows CI' 2>&1
-            $output | Write-Host
-            if (($output -join "`n") -match 'ok mesh/') { $created = $true; break }
-            Start-Sleep -Seconds 1
-          }
-          if (-not $created) { throw 'AddDeviceGroup failed' }
-
-          node .ci-meshcentral-src\meshctrl.js ListDeviceGroups --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-groups.json
-          $groups = Get-Content .ci-groups.json -Raw | ConvertFrom-Json
-          $group = $groups | Where-Object { $_.name -eq 'Mass Enter Windows CI' } | Select-Object -First 1
-          if (-not $group) { throw 'Device group not found' }
-          $meshId = ($group._id -split '/')[-1]
-          if ($meshId.Length -ne 64) { throw "Unexpected MeshID: $meshId" }
-          $meshId | Set-Content .ci-meshid
-
-      - name: Download and install real Windows MeshAgent service
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force .ci-agent | Out-Null
-          $meshId = (Get-Content .ci-meshid -Raw).Trim()
-          $encoded = [Uri]::EscapeDataString($meshId)
-          Invoke-WebRequest -Uri 'https://localhost:4443/meshagents?id=4' -SkipCertificateCheck -OutFile .ci-agent\meshagent.exe
-          Invoke-WebRequest -Uri "https://localhost:4443/meshsettings?id=$encoded" -SkipCertificateCheck -OutFile .ci-agent\meshagent.msh
-          if ((Get-Item .ci-agent\meshagent.exe).Length -lt 100000) { throw 'Downloaded Windows MeshAgent is unexpectedly small' }
-          Push-Location .ci-agent
-          & .\meshagent.exe -fullinstall
-          $agentExit = $LASTEXITCODE
-          Pop-Location
-          if ($agentExit -ne 0) { throw "MeshAgent -fullinstall failed with exit code $agentExit" }
-          Start-Sleep -Seconds 3
-          Get-Service | Where-Object { $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*' } | Format-Table -AutoSize
-
-      - name: Start Windows keyboard sink
-        shell: pwsh
-        run: |
-          $keyLog = "$PWD\.ci-windows-keys.log"
-          $sink = Start-Process -FilePath pwsh -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-File', "$PWD\.github\ci\windows-key-sink.ps1",
-            '-LogPath', $keyLog
-          ) -PassThru
-          $sink.Id | Set-Content .ci-sink.pid
-          $ready = $false
-          for ($i = 0; $i -lt 20; $i++) {
-            Start-Sleep -Milliseconds 500
-            $p = Get-Process -Id $sink.Id -ErrorAction SilentlyContinue
-            if (-not $p) { break }
-            if ($p.MainWindowHandle -ne 0) { $ready = $true; break }
-          }
-          if (-not $ready) { throw 'Windows keyboard sink did not create an interactive window' }
-          "Key sink PID=$($sink.Id) HWND=$((Get-Process -Id $sink.Id).MainWindowHandle)"
-
-      - name: Wait for Windows MeshAgent in MeshCentral
-        shell: pwsh
-        run: |
-          $url = 'wss://localhost:4443'
-          $connected = $false
-          for ($i = 0; $i -lt 60; $i++) {
-            node .ci-meshcentral-src\meshctrl.js ListDevices --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-devices.json
-            try {
-              $devices = Get-Content .ci-devices.json -Raw | ConvertFrom-Json
-              $device = $devices | Where-Object { (($_.conn -band 1) -ne 0) -and $_.agent.id -eq 4 } | Select-Object -First 1
-              if ($device) { $connected = $true; break }
-            } catch {}
-            Start-Sleep -Seconds 2
-          }
-          Get-Content .ci-devices.json
-          if (-not $connected) { throw 'Windows MeshAgent did not connect' }
-
-      - name: Install Playwright
-        shell: pwsh
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install chromium
-
-      - name: Exercise native Desktop and Mass Enter on Windows
+      - name: Run real Windows MeshCentral KVM integration
         shell: pwsh
         env:
           MESHCENTRAL_URL: https://localhost:4443/
           KEY_SINK_LOG: ${{ github.workspace }}\.ci-windows-keys.log
-        run: node .github\ci\meshcentral-windows-test.mjs
-
-      - name: Show diagnostics
-        if: always()
-        shell: pwsh
         run: |
-          '--- key log ---'
-          Get-Content .ci-windows-keys.log -ErrorAction SilentlyContinue
-          '--- devices ---'
-          Get-Content .ci-devices.json -ErrorAction SilentlyContinue
-          '--- MeshCentral stdout ---'
-          Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
-          '--- MeshCentral stderr ---'
-          Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
-          '--- MeshAgent service ---'
-          Get-Service | Where-Object { $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*' } | Format-Table -AutoSize
-
-      - name: Cleanup
-        if: always()
-        shell: pwsh
-        run: |
+          $ErrorActionPreference = 'Stop'
+          $server = $null
+          $sink = $null
           try {
-            if (Test-Path .ci-agent\meshagent.exe) {
-              Push-Location .ci-agent
-              & .\meshagent.exe -fulluninstall
-              Pop-Location
+            $server = Start-Process -FilePath node -ArgumentList @(
+              "$PWD\.ci-meshcentral-src\meshcentral.js",
+              '--datapath', "$PWD\.ci-data",
+              '--user', 'admin'
+            ) -RedirectStandardOutput "$PWD\.ci-meshcentral.log" -RedirectStandardError "$PWD\.ci-meshcentral.err.log" -PassThru
+
+            $ready = $false
+            for ($i = 0; $i -lt 90; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $r = Invoke-WebRequest -Uri 'https://localhost:4443/' -SkipCertificateCheck -TimeoutSec 3
+                if ($r.StatusCode -eq 200) { $ready = $true; break }
+              } catch {}
+              if ($server.HasExited) { break }
             }
-          } catch {}
-          if (Test-Path .ci-sink.pid) {
-            Stop-Process -Id ([int](Get-Content .ci-sink.pid -Raw)) -Force -ErrorAction SilentlyContinue
+            Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
+            Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
+            if (-not $ready) { throw 'MeshCentral did not start on port 4443' }
+
+            $url = 'wss://localhost:4443'
+            $output = node .ci-meshcentral-src\meshctrl.js AddDeviceGroup --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter Windows CI' 2>&1
+            $output | Write-Host
+            if (($output -join "`n") -notmatch 'ok mesh/') { throw 'AddDeviceGroup failed' }
+
+            node .ci-meshcentral-src\meshctrl.js ListDeviceGroups --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-groups.json
+            $groups = Get-Content .ci-groups.json -Raw | ConvertFrom-Json
+            $group = $groups | Where-Object { $_.name -eq 'Mass Enter Windows CI' } | Select-Object -First 1
+            if (-not $group) { throw 'Device group not found' }
+            $meshId = ($group._id -split '/')[-1]
+            if ($meshId.Length -ne 64) { throw "Unexpected MeshID: $meshId" }
+
+            New-Item -ItemType Directory -Force .ci-agent | Out-Null
+            $encoded = [Uri]::EscapeDataString($meshId)
+            Invoke-WebRequest -Uri 'https://localhost:4443/meshagents?id=4' -SkipCertificateCheck -OutFile .ci-agent\meshagent.exe
+            Invoke-WebRequest -Uri "https://localhost:4443/meshsettings?id=$encoded" -SkipCertificateCheck -OutFile .ci-agent\meshagent.msh
+            if ((Get-Item .ci-agent\meshagent.exe).Length -lt 100000) { throw 'Downloaded Windows MeshAgent is unexpectedly small' }
+
+            Push-Location .ci-agent
+            & .\meshagent.exe -fullinstall
+            $agentExit = $LASTEXITCODE
+            Pop-Location
+            if ($agentExit -ne 0) { throw "MeshAgent -fullinstall failed with exit code $agentExit" }
+
+            $sink = Start-Process -FilePath pwsh -ArgumentList @(
+              '-NoProfile', '-ExecutionPolicy', 'Bypass',
+              '-File', "$PWD\.github\ci\windows-key-sink.ps1",
+              '-LogPath', "$PWD\.ci-windows-keys.log"
+            ) -PassThru
+
+            $sinkReady = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Milliseconds 500
+              $p = Get-Process -Id $sink.Id -ErrorAction SilentlyContinue
+              if (-not $p) { break }
+              if ($p.MainWindowHandle -ne 0) { $sinkReady = $true; break }
+            }
+            if (-not $sinkReady) { throw 'Windows keyboard sink did not create an interactive window' }
+            "Key sink PID=$($sink.Id) HWND=$((Get-Process -Id $sink.Id).MainWindowHandle)"
+
+            $connected = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              node .ci-meshcentral-src\meshctrl.js ListDevices --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-devices.json
+              try {
+                $devices = Get-Content .ci-devices.json -Raw | ConvertFrom-Json
+                $device = $devices | Where-Object { (($_.conn -band 1) -ne 0) -and $_.agent.id -eq 4 } | Select-Object -First 1
+                if ($device) { $connected = $true; break }
+              } catch {}
+              Start-Sleep -Seconds 2
+            }
+            Get-Content .ci-devices.json -ErrorAction SilentlyContinue
+            if (-not $connected) { throw 'Windows MeshAgent did not connect' }
+
+            node .github\ci\meshcentral-windows-test.mjs
+            if ($LASTEXITCODE -ne 0) { throw "Browser integration failed with exit code $LASTEXITCODE" }
           }
-          if (Test-Path .ci-server.pid) {
-            Stop-Process -Id ([int](Get-Content .ci-server.pid -Raw)) -Force -ErrorAction SilentlyContinue
+          finally {
+            '--- key log ---'
+            Get-Content .ci-windows-keys.log -ErrorAction SilentlyContinue
+            '--- devices ---'
+            Get-Content .ci-devices.json -ErrorAction SilentlyContinue
+            '--- MeshCentral stdout ---'
+            Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
+            '--- MeshCentral stderr ---'
+            Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
+            '--- listeners ---'
+            Get-NetTCPConnection -LocalPort 4443 -ErrorAction SilentlyContinue | Format-Table -AutoSize
+            '--- MeshAgent service ---'
+            Get-Service | Where-Object { $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*' } | Format-Table -AutoSize
+
+            try {
+              if (Test-Path .ci-agent\meshagent.exe) {
+                Push-Location .ci-agent
+                & .\meshagent.exe -fulluninstall
+                Pop-Location
+              }
+            } catch {}
+            if ($sink) { Stop-Process -Id $sink.Id -Force -ErrorAction SilentlyContinue }
+            if ($server) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
           }

@@ -1,12 +1,7 @@
-name: MeshCentral integration
+name: MeshCentral Linux integration
 
 on:
-  push:
   workflow_dispatch:
-
-concurrency:
-  group: meshcentral-integration-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   integration:
