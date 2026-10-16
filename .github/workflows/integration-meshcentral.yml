@@ -67,13 +67,16 @@ jobs:
             --name meshcentral-test \
             --network host \
             -e DYNAMIC_CONFIG=false \
-            -e ARGS='--user admin' \
             -v "$PWD/.ci-data:/opt/meshcentral/meshcentral-data" \
             ghcr.io/ylianst/meshcentral:1.2.6
 
           for i in $(seq 1 60); do
             if curl -kfsS https://localhost/ >/dev/null; then
               break
+            fi
+            if ! docker inspect -f '{{.State.Running}}' meshcentral-test 2>/dev/null | grep -q true; then
+              docker logs meshcentral-test 2>&1 || true
+              exit 1
             fi
             sleep 2
           done
