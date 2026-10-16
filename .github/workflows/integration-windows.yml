@@ -65,7 +65,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "MeshCentral account creation failed" }
 
       - name: Start real MeshCentral
+        id: meshcentral-server
         shell: pwsh
+        background: true
         run: |
           $server = Start-Process -FilePath node -ArgumentList @(
             "$PWD\.ci-meshcentral-src\meshcentral.js",
@@ -73,7 +75,12 @@ jobs:
             '--user', 'admin'
           ) -RedirectStandardOutput "$PWD\.ci-meshcentral.log" -RedirectStandardError "$PWD\.ci-meshcentral.err.log" -PassThru
           $server.Id | Set-Content .ci-server.pid
+          while ((-not (Test-Path .ci-stop-server)) -and (-not $server.HasExited)) { Start-Sleep -Seconds 1 }
+          if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
 
+      - name: Wait for real MeshCentral
+        shell: pwsh
+        run: |
           $ready = $false
           for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep -Seconds 1
@@ -81,11 +88,11 @@ jobs:
               $r = Invoke-WebRequest -Uri 'https://localhost:4443/' -SkipCertificateCheck -TimeoutSec 3
               if ($r.StatusCode -eq 200) { $ready = $true; break }
             } catch {}
-            if ($server.HasExited) { break }
           }
           Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
           Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
           if (-not $ready) { throw 'MeshCentral did not start on port 4443' }
+          Get-NetTCPConnection -LocalPort 4443 -State Listen -ErrorAction SilentlyContinue | Format-Table -AutoSize
           Start-Sleep -Seconds 2
 
       - name: Create device group
@@ -100,7 +107,6 @@ jobs:
             Start-Sleep -Seconds 1
           }
           if (-not $created) { throw 'AddDeviceGroup failed' }
-
           node .ci-meshcentral-src\meshctrl.js ListDeviceGroups --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-groups.json
           $groups = Get-Content .ci-groups.json -Raw | ConvertFrom-Json
           $group = $groups | Where-Object { $_.name -eq 'Mass Enter Windows CI' } | Select-Object -First 1
@@ -127,24 +133,31 @@ jobs:
           Get-Service | Where-Object { $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*' } | Format-Table -AutoSize
 
       - name: Start Windows keyboard sink
+        id: windows-key-sink
         shell: pwsh
+        background: true
         run: |
-          $keyLog = "$PWD\.ci-windows-keys.log"
           $sink = Start-Process -FilePath pwsh -ArgumentList @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass',
             '-File', "$PWD\.github\ci\windows-key-sink.ps1",
-            '-LogPath', $keyLog
+            '-LogPath', "$PWD\.ci-windows-keys.log"
           ) -PassThru
           $sink.Id | Set-Content .ci-sink.pid
+          while ((-not (Test-Path .ci-stop-sink)) -and (-not $sink.HasExited)) { Start-Sleep -Seconds 1 }
+          if (-not $sink.HasExited) { Stop-Process -Id $sink.Id -Force -ErrorAction SilentlyContinue }
+
+      - name: Wait for Windows keyboard sink
+        shell: pwsh
+        run: |
           $ready = $false
-          for ($i = 0; $i -lt 20; $i++) {
+          for ($i = 0; $i -lt 40; $i++) {
             Start-Sleep -Milliseconds 500
-            $p = Get-Process -Id $sink.Id -ErrorAction SilentlyContinue
-            if (-not $p) { break }
-            if ($p.MainWindowHandle -ne 0) { $ready = $true; break }
+            $pid = [int](Get-Content .ci-sink.pid -Raw)
+            $sink = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            if ($sink -and $sink.MainWindowHandle -ne 0) { $ready = $true; break }
           }
           if (-not $ready) { throw 'Windows keyboard sink did not create an interactive window' }
-          "Key sink PID=$($sink.Id) HWND=$((Get-Process -Id $sink.Id).MainWindowHandle)"
+          "Key sink PID=$($sink.Id) HWND=$($sink.MainWindowHandle)"
 
       - name: Wait for Windows MeshAgent in MeshCentral
         shell: pwsh
@@ -188,6 +201,8 @@ jobs:
           Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
           '--- MeshCentral stderr ---'
           Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
+          '--- listeners ---'
+          Get-NetTCPConnection -LocalPort 4443 -ErrorAction SilentlyContinue | Format-Table -AutoSize
           '--- MeshAgent service ---'
           Get-Service | Where-Object { $_.DisplayName -like '*Mesh Agent*' -or $_.Name -like '*meshagent*' } | Format-Table -AutoSize
 
@@ -195,6 +210,8 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          New-Item -ItemType File -Force .ci-stop-sink | Out-Null
+          New-Item -ItemType File -Force .ci-stop-server | Out-Null
           try {
             if (Test-Path .ci-agent\meshagent.exe) {
               Push-Location .ci-agent
@@ -202,9 +219,3 @@ jobs:
               Pop-Location
             }
           } catch {}
-          if (Test-Path .ci-sink.pid) {
-            Stop-Process -Id ([int](Get-Content .ci-sink.pid -Raw)) -Force -ErrorAction SilentlyContinue
-          }
-          if (Test-Path .ci-server.pid) {
-            Stop-Process -Id ([int](Get-Content .ci-server.pid -Raw)) -Force -ErrorAction SilentlyContinue
-          }
