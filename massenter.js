@@ -135,6 +135,9 @@ module.exports.massenter = function (parent) {
             unknown: 'Не удалось достоверно прочитать состояние консольного сеанса и активного рабочего стола.'
         };
         if (facts && facts.error === 'not-windows') reasons.unknown = 'Проверка доступна только для Windows';
+        if (facts && facts.error === 'desktop-unavailable') reasons.unknown = 'Windows не разрешила прочитать активный рабочий стол';
+        if (facts && facts.error === 'wts-unavailable') reasons.unknown = 'Windows не предоставила сведения о консольном сеансе';
+        if (facts && facts.error === 'console-changed') reasons.unknown = 'Консольный сеанс изменился во время проверки';
         if (facts && facts.error === 'busy') reasons.unknown = 'Агент уже выполняет проверку; повторите позже';
         pending.reply(state, reasons[state]);
     };

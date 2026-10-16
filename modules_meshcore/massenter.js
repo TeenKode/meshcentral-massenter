@@ -123,7 +123,8 @@ function probe(callback) {
         if (session <= 0 || session === 0xFFFFFFFF) { finish({ error: 'no-console' }); return; }
         busy = true;
         var script = 'try { console.log(JSON.stringify((' + nativeSnapshot.toString() + ')(' + session + '))); }' +
-            'catch(e) { console.log(JSON.stringify({error:"native-unavailable"})); } process.exit(0);';
+            'catch(e) { var code = String(e.message || e); var known = ["wts-unavailable", "wts-invalid", "desktop-unavailable", "console-changed"]; ' +
+            'console.log(JSON.stringify({error:known.indexOf(code) >= 0 ? code : "native-unavailable"})); } process.exit(0);';
         child = require('child_process').execFile(process.execPath,
             [process.execPath.split('\\').pop(), '-b64exec', Buffer.from(script).toString('base64')], { type: 2 });
         timer = setTimeout(function () { finish({ error: 'timeout' }); }, 6000);
