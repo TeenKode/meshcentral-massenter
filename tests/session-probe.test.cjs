@@ -150,7 +150,7 @@ test('non-Windows and offline agents receive no native probe; per-user requests 
 test('helper embeds original module source and returns facts through a private pipe', () => {
     const source = fs.readFileSync(require.resolve('../modules_meshcore/massenter.js'), 'utf8');
     const token = 'a'.repeat(48);
-    const script = buildProbeScript(2, source, 'local-probe-pipe', token);
+    const script = buildProbeScript(2, 'local-probe-pipe', token);
     const modules = {};
     let result;
     vm.runInNewContext(script, {
@@ -164,13 +164,13 @@ test('helper embeds original module source and returns facts through a private p
                 cb.call(socket); return socket;
             } };
         },
-        setTimeout() {}, process: { exit() {} }
+        setTimeout() {}, process: { env: { MASSENTER_PROBE_MODULE: source }, exit() {} }
     });
     assert.equal(modules.massenter, source);
     assert.deepEqual(result.facts, unlocked);
     assert.equal(result.token, token);
-    assert.ok(Buffer.from(script).toString('base64').length < 24000);
-    assert.throws(() => buildProbeScript('2);malicious()', source, 'pipe', token), /invalid-probe-script/);
+    assert.ok(Buffer.from(script).toString('base64').length < 2800);
+    assert.throws(() => buildProbeScript('2);malicious()', 'pipe', token), /invalid-probe-script/);
 });
 
 function agentHarness() {
@@ -188,7 +188,7 @@ function agentHarness() {
         require(name) {
             if (name === 'user-sessions') return { consoleUid: () => 2 };
             if (name === 'net') return { createServer: () => ipc };
-            if (name === 'child_process') return { execFile(path, args, options) { assert.equal(args[0], 'MeshAgent.exe'); assert.equal(options.type, 2); return child; } };
+            if (name === 'child_process') return { execFile(path, args, options) { assert.equal(args[0], 'MeshAgent.exe'); assert.equal(options.type, 2); assert.equal(options.env.MASSENTER_PROBE_MODULE, source); assert.ok(args[2].length < 2800); return child; } };
             throw new Error(name);
         },
         setTimeout(fn) { const id = ++next; timers.set(id, fn); return id; },

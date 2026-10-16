@@ -107,11 +107,12 @@ function nativeSnapshot(expectedSession) {
 }
 
 // Duktape's Function.toString() returns "[ecmascript code]", not source.
-// Use the original bundled module source from getJSModule(), like win-deskutils.
-function buildProbeScript(session, source, pipePath, token) {
+// Load the bundled module through an environment variable, like win-deskutils.
+// MeshAgent's Windows process launcher has a 4096-WCHAR command buffer.
+function buildProbeScript(session, pipePath, token) {
     if (typeof session !== 'number' || session <= 0 || session >= 0xFFFFFFFF || Math.floor(session) !== session ||
-        typeof source !== 'string' || typeof pipePath !== 'string' || !/^[a-f0-9]{48}$/.test(token)) throw new Error('invalid-probe-script');
-    return 'var facts; try { addModule("massenter", ' + JSON.stringify(source) + '); ' +
+        typeof pipePath !== 'string' || !/^[a-f0-9]{48}$/.test(token)) throw new Error('invalid-probe-script');
+    return 'var facts; try { addModule("massenter", process.env.MASSENTER_PROBE_MODULE); ' +
         'facts = require("massenter").nativeSnapshot(' + session + '); }' +
         'catch(e) { var code = String(e.message || e); var known = ["wts-unavailable", "wts-invalid", "desktop-unavailable", "console-changed"]; ' +
         'facts = {error:known.indexOf(code) >= 0 ? code : "native-unavailable"}; } ' +
@@ -166,12 +167,12 @@ function probe(callback, token) {
         });
         ipc.on('error', function () { finish({ error: 'native-unavailable' }); });
         ipc.listen({ path: pipePath });
-        var script = buildProbeScript(session, getJSModule('massenter'), pipePath, token);
+        var script = buildProbeScript(session, pipePath, token);
         var encoded = Buffer.from(script).toString('base64');
-        if (encoded.length > 24000) throw new Error('probe-script-too-large');
+        if (encoded.length > 2800) throw new Error('probe-script-too-large');
         timer = setTimeout(function () { timer = null; finish({ error: 'timeout' }); }, 6000);
         child = require('child_process').execFile(process.execPath,
-            [process.execPath.split("\\").pop(), "-b64exec", encoded], { type: 2 });
+            [process.execPath.split("\\").pop(), "-b64exec", encoded], { type: 2, env: { MASSENTER_PROBE_MODULE: getJSModule('massenter') } });
         child.stdout.on('data', function () { });
         child.stderr.on('data', function () { });
     } catch (ignore) { finish({ error: 'native-unavailable' }); }
