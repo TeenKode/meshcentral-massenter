@@ -79,7 +79,9 @@ jobs:
           groups=json.load(open('.ci-groups.json'))
           g=next(x for x in groups if x.get('name')=='Mass Enter CI')
           meshidhex=g['_idhex']
-          assert len(meshidhex) >= 64, meshidhex
+          if meshidhex.lower().startswith('0x'):
+              meshidhex=meshidhex[2:]
+          assert len(meshidhex) == 96, meshidhex
           open('.ci-meshidhex','w').write(meshidhex)
           PY
 
