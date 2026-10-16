@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const factory = require('../massenter.js').massenter;
-const { classifyFacts, nativeSnapshot } = require('../modules_meshcore/massenter.js');
+const { classifyFacts, nativeSnapshot, buildProbeScript } = require('../modules_meshcore/massenter.js');
 const signin = { sessionId: 1, processSessionId: 1, username: '', connectionState: 1, locked: true, desktop: 'Winlogon', consistent: true };
 const unlocked = { ...signin, username: 'Alice', connectionState: 0, locked: false, desktop: 'Default' };
 
@@ -143,4 +143,22 @@ test('non-Windows and offline agents receive no native probe; per-user requests 
         assert.equal(Object.keys(h.me.pendingProbes).length, 4);
         assert.equal(h.replies.length, 3);
     } finally { h.cleanup(); }
+});
+
+
+test('helper embeds original module source rather than Duktape function placeholders', () => {
+    const source = fs.readFileSync(require.resolve('../modules_meshcore/massenter.js'), 'utf8');
+    const script = buildProbeScript(2, source);
+    const modules = {};
+    let result, exit;
+    vm.runInNewContext(script, {
+        addModule(name, text) { modules[name] = text; },
+        require(name) { assert.equal(name, 'massenter'); return { nativeSnapshot(id) { assert.equal(id, 2); return unlocked; } }; },
+        console: { log(text) { result = JSON.parse(text); } }, process: { exit(code) { exit = code; } }
+    });
+    assert.equal(modules.massenter, source);
+    assert.deepEqual(result, unlocked);
+    assert.equal(exit, 0);
+    assert.ok(Buffer.from(script).toString('base64').length < 24000);
+    assert.throws(() => buildProbeScript('2);malicious()', source), /invalid-probe-script/);
 });

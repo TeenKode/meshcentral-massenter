@@ -106,6 +106,16 @@ function nativeSnapshot(expectedSession) {
         desktop: desktop, consistent: consistent };
 }
 
+// Duktape's Function.toString() returns "[ecmascript code]", not source.
+// Use the original bundled module source from getJSModule(), like win-deskutils.
+function buildProbeScript(session, source) {
+    if (typeof session !== 'number' || session <= 0 || session >= 0xFFFFFFFF || Math.floor(session) !== session || typeof source !== 'string') throw new Error('invalid-probe-script');
+    return 'try { addModule("massenter", ' + JSON.stringify(source) + '); ' +
+        'console.log(JSON.stringify(require("massenter").nativeSnapshot(' + session + '))); }' +
+        'catch(e) { var code = String(e.message || e); var known = ["wts-unavailable", "wts-invalid", "desktop-unavailable", "console-changed"]; ' +
+        'console.log(JSON.stringify({error:known.indexOf(code) >= 0 ? code : "native-unavailable"})); } process.exit(0);';
+}
+
 var busy = false;
 function probe(callback) {
     if (process.platform !== 'win32') { callback({ error: 'not-windows' }); return; }
@@ -122,11 +132,11 @@ function probe(callback) {
         var session = require('user-sessions').consoleUid();
         if (session <= 0 || session === 0xFFFFFFFF) { finish({ error: 'no-console' }); return; }
         busy = true;
-        var script = 'try { console.log(JSON.stringify((' + nativeSnapshot.toString() + ')(' + session + '))); }' +
-            'catch(e) { var code = String(e.message || e); var known = ["wts-unavailable", "wts-invalid", "desktop-unavailable", "console-changed"]; ' +
-            'console.log(JSON.stringify({error:known.indexOf(code) >= 0 ? code : "native-unavailable"})); } process.exit(0);';
+        var script = buildProbeScript(session, getJSModule('massenter'));
+        var encoded = Buffer.from(script).toString('base64');
+        if (encoded.length > 24000) throw new Error('probe-script-too-large');
         child = require('child_process').execFile(process.execPath,
-            [process.execPath.split('\\').pop(), '-b64exec', Buffer.from(script).toString('base64')], { type: 2 });
+            [process.execPath.split('\\').pop(), '-b64exec', encoded], { type: 2 });
         timer = setTimeout(function () { finish({ error: 'timeout' }); }, 6000);
         child.stdout.on('data', function (data) {
             output += data.toString();
@@ -146,6 +156,7 @@ function probe(callback) {
 
 module.exports.classifyFacts = classifyFacts;
 module.exports.nativeSnapshot = nativeSnapshot;
+module.exports.buildProbeScript = buildProbeScript;
 module.exports.probe = probe;
 module.exports.consoleaction = function (command, rights) {
     if (!command || command.operation !== 'probeSession' || typeof command.probeToken !== 'string' ||
