@@ -73,26 +73,24 @@ jobs:
           docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js AddDeviceGroup \
             --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter CI'
           docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js ListDeviceGroups \
-            --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json --hex > .ci-groups.json
+            --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json > .ci-groups.json
           python3 - <<'PY'
           import json
           groups=json.load(open('.ci-groups.json'))
           g=next(x for x in groups if x.get('name')=='Mass Enter CI')
-          meshidhex=g['_idhex']
-          if meshidhex.lower().startswith('0x'):
-              meshidhex=meshidhex[2:]
-          assert len(meshidhex) == 96, meshidhex
-          open('.ci-meshidhex','w').write(meshidhex)
+          meshid=g['_id'].split('/')[-1]
+          assert len(meshid)==64, meshid
+          open('.ci-meshid','w').write(meshid)
           PY
 
       - name: Download real Linux KVM MeshAgent and settings
         shell: bash
         run: |
           set -euxo pipefail
-          MESHIDHEX="$(cat .ci-meshidhex)"
+          MESHID="$(cat .ci-meshid)"
           mkdir -p .ci-agent
           curl -kfsS 'https://localhost/meshagents?id=6' -o .ci-agent/meshagent
-          curl -kfsS "https://localhost/meshsettings?id=${MESHIDHEX}" -o .ci-agent/meshagent.msh
+          curl -kfsS "https://localhost/meshsettings?id=${MESHID}" -o .ci-agent/meshagent.msh
           test -s .ci-agent/meshagent
           test -s .ci-agent/meshagent.msh
           chmod +x .ci-agent/meshagent
