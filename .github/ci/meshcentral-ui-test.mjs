@@ -17,8 +17,16 @@ page.on('console', (msg) => console.log('BROWSER:', msg.type(), msg.text()));
 
 try {
   await page.goto('https://localhost/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForSelector('#MassEnterButton', { timeout: 30000 });
 
+  const username = page.locator('#username');
+  if (await username.isVisible().catch(() => false)) {
+    await username.fill('admin');
+    await page.locator('#password').fill('MassEnter-Test-123!');
+    await page.locator('#loginButton').click();
+    await page.waitForLoadState('domcontentloaded');
+  }
+
+  await page.waitForSelector('#MassEnterButton', { timeout: 30000 });
   console.log('Mass Enter button loaded on real MeshCentral page');
 
   const devices = page.locator('.DeviceCheckbox');
@@ -32,7 +40,6 @@ try {
   await page.locator('#massEnterConcurrency').fill('1');
 
   await page.locator('#idx_dlgOkButton').click();
-
   await page.waitForSelector('#massEnterProgressPanel', { state: 'visible', timeout: 10000 });
 
   const dialogMode = await page.evaluate(() => (typeof xxdialogMode === 'undefined' ? null : xxdialogMode));
