@@ -103,8 +103,8 @@ try {
   await page.locator('#idx_dlgOkButton').click();
 
   await page.waitForSelector('#massEnterProgressPanel', { state: 'visible', timeout: 10000 });
-  const dialogMode = await page.evaluate(() => (typeof xxdialogMode === 'undefined' ? null : xxdialogMode));
-  if (dialogMode !== 0) throw new Error(`MeshCentral modal remained active: xxdialogMode=${dialogMode}`);
+  await page.waitForSelector('#dialog', { state: 'hidden', timeout: 5000 });
+  console.log('MeshCentral modal is closed while Mass Enter runs');
 
   await page.waitForFunction(() => {
     const el = document.getElementById('massEnterProgress');
@@ -123,7 +123,7 @@ try {
 
   const groupAction = page.locator('#GroupActionButton');
   await groupAction.click({ timeout: 10000 });
-  await page.waitForFunction(() => typeof xxdialogMode !== 'undefined' && xxdialogMode !== 0, { timeout: 5000 });
+  await page.waitForSelector('#dialog', { state: 'visible', timeout: 5000 });
   console.log('Group Action remains interactive after Mass Enter on Windows');
 
   if (pageErrors.length) throw new Error(`Browser page errors: ${pageErrors.join(' | ')}`);
