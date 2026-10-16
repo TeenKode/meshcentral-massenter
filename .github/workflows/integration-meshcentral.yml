@@ -82,7 +82,7 @@ jobs:
           done
           curl -kfsS https://localhost/ >/dev/null
           docker logs meshcentral-test 2>&1 | tee .ci-meshcentral.log
-          grep -q 'Mass Enter plugin 0.1.1 loaded' .ci-meshcentral.log
+          grep -q 'MeshCentral HTTPS server running on port 443' .ci-meshcentral.log
 
       - name: Create device group
         shell: bash
