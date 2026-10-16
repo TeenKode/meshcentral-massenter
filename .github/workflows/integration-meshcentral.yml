@@ -111,7 +111,7 @@ jobs:
           test -n "$WIN"
           DISPLAY=:99 xdotool windowfocus --sync "$WIN"
           DISPLAY=:99 xdotool key a
-          (cd .ci-agent && DISPLAY=:99 ./meshagent > ../.ci-agent.log 2>&1) &
+          (cd .ci-agent && sudo env DISPLAY=:99 ./meshagent > ../.ci-agent.log 2>&1) &
           echo $! > .ci-agent.pid
           for i in $(seq 1 60); do
             docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js ListDevices \
@@ -129,6 +129,7 @@ jobs:
           import json
           d=json.load(open('.ci-devices.json'))
           assert any((x.get('conn') or 0)&1 for x in d), d
+          assert any(x.get('agent',{}).get('root') is True for x in d), d
           PY
 
       - name: Install Playwright
