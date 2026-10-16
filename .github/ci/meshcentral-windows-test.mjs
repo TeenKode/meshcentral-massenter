@@ -53,6 +53,23 @@ try {
   if (!checkboxValue || !checkboxValue.startsWith('devid_')) throw new Error(`Unexpected device checkbox value: ${checkboxValue}`);
   const nodeid = checkboxValue.substring(6);
 
+  // Exercise the real module delivered inside the MeshAgent core. The hosted
+  // runner has an interactive, unlocked console for the keyboard sink below.
+  const sessionProbe = await page.evaluate(id => new Promise((resolve, reject) => {
+    const me = pluginHandler.massenter;
+    const requestId = 'ci-native-console-probe';
+    if (!me.sessionProbeRequests) me.sessionProbeRequests = {};
+    me.sessionProbeRequests[requestId] = {
+      timer: setTimeout(() => reject(new Error('Native probe response timed out')), 15000),
+      finish: resolve
+    };
+    meshserver.send({ action: 'plugin', plugin: 'massenter', operation: 'checkSession', nodeid: id, requestId });
+  }), nodeid);
+  console.log('Real Windows console probe:', JSON.stringify(sessionProbe));
+  if (sessionProbe.state !== 'unlocked') {
+    throw new Error('Expected unlocked interactive console; probe returned ' + JSON.stringify(sessionProbe));
+  }
+
   // Native MeshCentral Desktop control test. This proves the Windows runner,
   // MeshAgent service and keyboard event sink are a valid KVM input path.
   await page.evaluate((id) => {

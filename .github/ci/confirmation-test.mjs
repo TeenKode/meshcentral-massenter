@@ -41,6 +41,10 @@ try {
   });
   await page.locator('#MassEnterButton').click();
   await page.waitForFunction(() => !document.getElementById('massEnterDelay').disabled);
+  await page.locator('#massEnterCheckSessions').click();
+  await page.waitForFunction(() => pluginHandler.massenter.sessionCheck && !pluginHandler.massenter.sessionCheck.running);
+  assert.match(await page.evaluate(() => pluginHandler.massenter.sessionRows['node//confirmation-test'].textContent), /Неизвестно/);
+  assert.equal(await page.locator('#massEnterCheckSessions').isEnabled(), true);
   const previousSettings = await page.evaluate(() => pluginHandler.massenter.readSettings());
   await page.locator('#massEnterDelay').fill('1700');
   await page.locator('#massEnterConcurrency').fill('3');
