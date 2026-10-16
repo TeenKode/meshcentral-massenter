@@ -100,16 +100,15 @@ jobs:
             --url wss://localhost:443 \
             --loginuser admin \
             --loginpass 'MassEnter-Test-123!' \
-            --json --hex > .ci-groups.json
+            --json > .ci-groups.json
 
           cat .ci-groups.json
           python3 - <<'PY'
           import json
           groups=json.load(open('.ci-groups.json', encoding='utf-8'))
           g=next(x for x in groups if x.get('name') == 'Mass Enter CI')
-          meshid=g['_idhex']
-          if meshid.startswith('0x'): meshid=meshid[2:]
-          assert len(meshid)==64, meshid
+          meshid=g['_id']
+          assert meshid.startswith('mesh//'), meshid
           open('.ci-meshid','w').write(meshid)
           PY
 
