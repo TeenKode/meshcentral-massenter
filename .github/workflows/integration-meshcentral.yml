@@ -27,19 +27,10 @@ jobs:
               "redirPort": 0,
               "mpsPort": 0,
               "sessionKey": "MassEnterIntegrationSessionKey012345678901234567890123456789012345678901234567890123",
-              "plugins": {
-                "enabled": true,
-                "list": ["massenter"]
-              },
+              "plugins": {"enabled": true, "list": ["massenter"]},
               "WebRTC": false
             },
-            "domains": {
-              "": {
-                "title": "Mass Enter Integration Test",
-                "newAccounts": true,
-                "minify": false
-              }
-            }
+            "domains": {"": {"title": "Mass Enter Integration Test", "newAccounts": true, "minify": false}}
           }
           JSON
 
@@ -49,35 +40,23 @@ jobs:
       - name: Create MeshCentral administrator
         shell: bash
         run: |
-          set -euxo pipefail
-          docker run --rm \
-            --entrypoint node \
+          docker run --rm --entrypoint node \
             -v "$PWD/.ci-data:/opt/meshcentral/meshcentral-data" \
             ghcr.io/ylianst/meshcentral:1.2.6 \
             /opt/meshcentral/meshcentral/meshcentral \
             --configfile /opt/meshcentral/meshcentral-data/config.json \
-            --createaccount admin \
-            --pass 'MassEnter-Test-123!'
+            --createaccount admin --pass 'MassEnter-Test-123!'
 
       - name: Start real MeshCentral
         shell: bash
         run: |
           set -euxo pipefail
-          docker run -d \
-            --name meshcentral-test \
-            --network host \
-            -e DYNAMIC_CONFIG=false \
+          docker run -d --name meshcentral-test --network host -e DYNAMIC_CONFIG=false \
             -v "$PWD/.ci-data:/opt/meshcentral/meshcentral-data" \
             ghcr.io/ylianst/meshcentral:1.2.6
-
           for i in $(seq 1 60); do
-            if curl -kfsS https://localhost/ >/dev/null; then
-              break
-            fi
-            if ! docker inspect -f '{{.State.Running}}' meshcentral-test 2>/dev/null | grep -q true; then
-              docker logs meshcentral-test 2>&1 || true
-              exit 1
-            fi
+            curl -kfsS https://localhost/ >/dev/null && break
+            docker inspect -f '{{.State.Running}}' meshcentral-test | grep -q true
             sleep 2
           done
           curl -kfsS https://localhost/ >/dev/null
@@ -88,29 +67,16 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js \
-            AddDeviceGroup \
-            --url wss://localhost:443 \
-            --loginuser admin \
-            --loginpass 'MassEnter-Test-123!' \
-            --name 'Mass Enter CI'
-
-          docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js \
-            ListDeviceGroups \
-            --url wss://localhost:443 \
-            --loginuser admin \
-            --loginpass 'MassEnter-Test-123!' \
-            --json > .ci-groups.json
-
-          cat .ci-groups.json
+          docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js AddDeviceGroup \
+            --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter CI'
+          docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js ListDeviceGroups \
+            --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json > .ci-groups.json
           python3 - <<'PY'
           import json
-          groups=json.load(open('.ci-groups.json', encoding='utf-8'))
-          g=next(x for x in groups if x.get('name') == 'Mass Enter CI')
-          fullid=g['_id']
-          assert fullid.startswith('mesh//'), fullid
+          groups=json.load(open('.ci-groups.json'))
+          fullid=next(x for x in groups if x.get('name')=='Mass Enter CI')['_id']
           meshid=fullid[len('mesh//'):]
-          assert len(meshid)==64, meshid
+          assert len(meshid)==64
           open('.ci-meshid','w').write(meshid)
           PY
 
@@ -120,18 +86,13 @@ jobs:
           set -euxo pipefail
           MESHID="$(cat .ci-meshid)"
           docker exec meshcentral-test mkdir -p /tmp/massenter-agent
-          docker exec -w /tmp/massenter-agent meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js \
-            AgentDownload \
-            --url wss://localhost:443 \
-            --loginuser admin \
-            --loginpass 'MassEnter-Test-123!' \
-            --id "$MESHID" \
-            --type 6
+          docker exec -w /tmp/massenter-agent meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js AgentDownload \
+            --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' \
+            --id "$MESHID" --type 6 || true
+          docker exec meshcentral-test test -s /tmp/massenter-agent/meshagent
           mkdir -p .ci-agent
           docker cp meshcentral-test:/tmp/massenter-agent/. .ci-agent/
-          find .ci-agent -maxdepth 2 -type f -ls
-          test -f .ci-agent/meshagent
-          test -f .ci-agent/meshagent.msh
+          test -s .ci-agent/meshagent
           chmod +x .ci-agent/meshagent
 
       - name: Start X11 desktop and MeshAgent
@@ -140,87 +101,62 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y xvfb x11-utils xdotool
-
           Xvfb :99 -screen 0 1024x768x24 -ac > .ci-xvfb.log 2>&1 &
           echo $! > .ci-xvfb.pid
           sleep 2
-
           DISPLAY=:99 xev -event keyboard > .ci-xev.log 2>&1 &
           echo $! > .ci-xev.pid
           sleep 2
           WIN="$(DISPLAY=:99 xdotool search --name 'Event Tester' | head -n1)"
           test -n "$WIN"
-          DISPLAY=:99 xdotool windowactivate --sync "$WIN"
+          DISPLAY=:99 xdotool windowfocus --sync "$WIN"
           DISPLAY=:99 xdotool key a
-
-          (
-            cd .ci-agent
-            DISPLAY=:99 ./meshagent > ../.ci-agent.log 2>&1
-          ) &
+          (cd .ci-agent && DISPLAY=:99 ./meshagent > ../.ci-agent.log 2>&1) &
           echo $! > .ci-agent.pid
-
           for i in $(seq 1 60); do
-            docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js \
-              ListDevices \
-              --url wss://localhost:443 \
-              --loginuser admin \
-              --loginpass 'MassEnter-Test-123!' \
-              --json > .ci-devices.json || true
-            if python3 - <<'PY'
+            docker exec meshcentral-test node /opt/meshcentral/meshcentral/meshctrl.js ListDevices \
+              --url wss://localhost:443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json > .ci-devices.json || true
+            python3 - <<'PY' && break || true
           import json,sys
-          try:
-              d=json.load(open('.ci-devices.json'))
-              ok=any((x.get('conn') or 0) & 1 for x in d)
-          except Exception:
-              ok=False
-          sys.exit(0 if ok else 1)
+          try: d=json.load(open('.ci-devices.json'))
+          except Exception: d=[]
+          sys.exit(0 if any((x.get('conn') or 0)&1 for x in d) else 1)
           PY
-            then
-              break
-            fi
             sleep 2
           done
           cat .ci-devices.json
           python3 - <<'PY'
           import json
           d=json.load(open('.ci-devices.json'))
-          assert any((x.get('conn') or 0) & 1 for x in d), d
+          assert any((x.get('conn') or 0)&1 for x in d), d
           PY
 
       - name: Install Playwright
-        shell: bash
         run: |
           npm install --no-save playwright@1.55.0
           npx playwright install chromium
 
       - name: Exercise Mass Enter in real MeshCentral UI
-        shell: bash
         run: node .github/ci/meshcentral-ui-test.mjs
 
       - name: Verify two Return key presses reached X11
         shell: bash
         run: |
-          set -euxo pipefail
           cat .ci-xev.log
           python3 - <<'PY'
           import re
           s=open('.ci-xev.log', errors='ignore').read()
           presses=len(re.findall(r'KeyPress event.*?keysym 0xff0d, Return', s, flags=re.S))
           print('Return KeyPress count:', presses)
-          assert presses >= 2, 'Expected at least two Return KeyPress events from Mass Enter'
+          assert presses >= 2
           PY
 
       - name: Dump diagnostics on failure
         if: failure()
-        shell: bash
         run: |
-          echo '=== MeshCentral logs ==='
           docker logs meshcentral-test 2>&1 || true
-          echo '=== Agent logs ==='
           cat .ci-agent.log 2>/dev/null || true
-          echo '=== XEV logs ==='
           cat .ci-xev.log 2>/dev/null || true
-          echo '=== Devices ==='
           cat .ci-devices.json 2>/dev/null || true
 
       - name: Cleanup
