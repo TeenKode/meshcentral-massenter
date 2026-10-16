@@ -1,7 +1,7 @@
 {
   "name": "Mass Enter",
   "shortName": "massenter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "TeenKode",
   "description": "Send Enter twice over the normal MeshCentral KVM channel to selected devices. No AutoLogon and no credentials stored.",
   "hasAdminPanel": false,
