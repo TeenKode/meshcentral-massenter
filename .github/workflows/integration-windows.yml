@@ -76,7 +76,7 @@ jobs:
           for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep -Seconds 1
             try {
-              $r = Invoke-WebRequest -Uri 'https://localhost:4443/' -SkipCertificateCheck -TimeoutSec 3
+              $r = Invoke-WebRequest -Uri 'https://127.0.0.1:4443/' -SkipCertificateCheck -TimeoutSec 3
               if ($r.StatusCode -eq 200) { $ready = $true; break }
             } catch {}
             if ($server.HasExited) { break }
@@ -84,13 +84,22 @@ jobs:
           Get-Content .ci-meshcentral.log -ErrorAction SilentlyContinue
           Get-Content .ci-meshcentral.err.log -ErrorAction SilentlyContinue
           if (-not $ready) { throw 'MeshCentral did not start on port 4443' }
+          Start-Sleep -Seconds 2
 
       - name: Create device group
         shell: pwsh
         run: |
-          node .ci-meshcentral-src\meshctrl.js AddDeviceGroup --url wss://localhost:4443 --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter Windows CI'
-          if ($LASTEXITCODE -ne 0) { throw 'AddDeviceGroup failed' }
-          node .ci-meshcentral-src\meshctrl.js ListDeviceGroups --url wss://localhost:4443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-groups.json
+          $url = 'wss://127.0.0.1:4443'
+          $created = $false
+          for ($i = 0; $i -lt 10; $i++) {
+            $output = node .ci-meshcentral-src\meshctrl.js AddDeviceGroup --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --name 'Mass Enter Windows CI' 2>&1
+            $output | Write-Host
+            if (($output -join "`n") -match 'ok mesh/') { $created = $true; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $created) { throw 'AddDeviceGroup failed' }
+
+          node .ci-meshcentral-src\meshctrl.js ListDeviceGroups --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-groups.json
           $groups = Get-Content .ci-groups.json -Raw | ConvertFrom-Json
           $group = $groups | Where-Object { $_.name -eq 'Mass Enter Windows CI' } | Select-Object -First 1
           if (-not $group) { throw 'Device group not found' }
@@ -104,8 +113,8 @@ jobs:
           New-Item -ItemType Directory -Force .ci-agent | Out-Null
           $meshId = (Get-Content .ci-meshid -Raw).Trim()
           $encoded = [Uri]::EscapeDataString($meshId)
-          Invoke-WebRequest -Uri 'https://localhost:4443/meshagents?id=4' -SkipCertificateCheck -OutFile .ci-agent\meshagent.exe
-          Invoke-WebRequest -Uri "https://localhost:4443/meshsettings?id=$encoded" -SkipCertificateCheck -OutFile .ci-agent\meshagent.msh
+          Invoke-WebRequest -Uri 'https://127.0.0.1:4443/meshagents?id=4' -SkipCertificateCheck -OutFile .ci-agent\meshagent.exe
+          Invoke-WebRequest -Uri "https://127.0.0.1:4443/meshsettings?id=$encoded" -SkipCertificateCheck -OutFile .ci-agent\meshagent.msh
           if ((Get-Item .ci-agent\meshagent.exe).Length -lt 100000) { throw 'Downloaded Windows MeshAgent is unexpectedly small' }
           Push-Location .ci-agent
           & .\meshagent.exe -fullinstall
@@ -138,9 +147,10 @@ jobs:
       - name: Wait for Windows MeshAgent in MeshCentral
         shell: pwsh
         run: |
+          $url = 'wss://127.0.0.1:4443'
           $connected = $false
           for ($i = 0; $i -lt 60; $i++) {
-            node .ci-meshcentral-src\meshctrl.js ListDevices --url wss://localhost:4443 --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-devices.json
+            node .ci-meshcentral-src\meshctrl.js ListDevices --url $url --loginuser admin --loginpass 'MassEnter-Test-123!' --json | Set-Content -Encoding UTF8 .ci-devices.json
             try {
               $devices = Get-Content .ci-devices.json -Raw | ConvertFrom-Json
               $device = $devices | Where-Object { (($_.conn -band 1) -ne 0) -and $_.agent.id -eq 4 } | Select-Object -First 1
@@ -160,7 +170,7 @@ jobs:
       - name: Exercise native Desktop and Mass Enter on Windows
         shell: pwsh
         env:
-          MESHCENTRAL_URL: https://localhost:4443/
+          MESHCENTRAL_URL: https://127.0.0.1:4443/
           KEY_SINK_LOG: ${{ github.workspace }}\.ci-windows-keys.log
         run: node .github\ci\meshcentral-windows-test.mjs
 
