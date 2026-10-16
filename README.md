@@ -1,15 +1,16 @@
 # MeshCentral Mass Enter
 
-Current version: **0.1.1**
+Current version: **0.1.2**
 
 MeshCentral plugin for one-time mass keyboard input on Windows sign-in screens.
 
 The plugin **does not enable AutoLogon**, does not change the Windows registry, does not store credentials, and does not execute login commands on endpoints. It opens a short normal MeshCentral KVM session to each selected device and sends:
 
-1. `Enter` key down + key up
-2. configurable delay, default `1000 ms`
-3. `Enter` key down + key up
-4. closes the KVM relay
+1. waits until the real KVM screen/input channel is initialized
+2. `Enter` key down + key up
+3. configurable delay, default `1000 ms`
+4. `Enter` key down + key up
+5. closes the KVM relay
 
 ## What it is for
 
@@ -44,7 +45,13 @@ MeshCentral reads `config.json`, compares the published plugin version with the 
 4. Change the delay or concurrency if necessary.
 5. Confirm.
 
-The confirmation modal closes immediately when the operation starts. Progress is displayed in a non-blocking floating panel so the rest of the MeshCentral interface remains usable. The panel reports `OK`, `SKIP`, or `ERR` for every processed device.
+MeshCentral itself closes the confirmation dialog before invoking the plugin callback. Mass Enter does not close that modal a second time. Progress is displayed in a non-blocking floating panel so the rest of the MeshCentral interface remains usable. The panel reports `OK`, `SKIP`, or `ERR` for every processed device.
+
+An `OK` result is only produced after a real Remote Desktop screen-size event has initialized the KVM channel and both Enter sequences have been written to that channel. If the relay opens but the desktop stream does not initialize, the device is reported as an error instead of a false success.
+
+## Testing
+
+The repository includes an integration workflow that runs against the official MeshCentral 1.2.6 container, creates a real device group, connects a real KVM-capable MeshAgent, opens the real MeshCentral web UI in Chromium, and compares Mass Enter behavior with MeshCentral's native Desktop implementation.
 
 ## Versioning
 
