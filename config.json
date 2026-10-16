@@ -9,7 +9,6 @@
   "changelogUrl": "https://raw.githubusercontent.com/TeenKode/meshcentral-massenter/main/CHANGELOG.md",
   "configUrl": "https://raw.githubusercontent.com/TeenKode/meshcentral-massenter/main/config.json",
   "downloadUrl": "https://github.com/TeenKode/meshcentral-massenter/archive/refs/heads/main.zip",
-
   "repository": {
     "type": "git",
     "url": "https://github.com/TeenKode/meshcentral-massenter.git"
