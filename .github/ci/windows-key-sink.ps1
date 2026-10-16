@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$LogPath
+    [string]$LogPath,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ReadyPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,6 +12,12 @@ Add-Type -AssemblyName System.Drawing
 
 $fullLogPath = [System.IO.Path]::GetFullPath($LogPath)
 [System.IO.File]::WriteAllText($fullLogPath, "")
+
+$fullReadyPath = $null
+if ($ReadyPath) {
+    $fullReadyPath = [System.IO.Path]::GetFullPath($ReadyPath)
+    if (Test-Path $fullReadyPath) { Remove-Item $fullReadyPath -Force }
+}
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Mass Enter CI Key Sink'
@@ -54,6 +63,11 @@ $form.Add_Shown({
     $form.BringToFront()
     $text.Focus()
     $focusTimer.Start()
+    if ($fullReadyPath) {
+        $pid = [System.Diagnostics.Process]::GetCurrentProcess().Id
+        $hwnd = [System.Diagnostics.Process]::GetCurrentProcess().MainWindowHandle
+        [System.IO.File]::WriteAllText($fullReadyPath, ("READY PID={0} HWND={1}" -f $pid, $hwnd))
+    }
 })
 
 $form.Add_FormClosed({ $focusTimer.Stop() })
